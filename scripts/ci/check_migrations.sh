@@ -2,6 +2,8 @@
 # Rehearses every migration on a throwaway Postgres and checks the rules in CLAUDE.md.
 # Needs: psql on PATH, and PG* environment variables pointing at an empty database.
 # Usage: scripts/ci/check_migrations.sh [migrations_dir]
+# Behaviour tests: every .sql file in the sibling tests/ folder runs after the migrations
+# and must finish without error (each test rolls itself back).
 set -euo pipefail
 
 dir="${1:-supabase/migrations}"
@@ -78,4 +80,16 @@ begin
 end $$;
 SQL
 echo "  core is server-only, RLS is on, the shared tables exist"
+
+echo "== 5. Behaviour tests"
+tests_dir="$(dirname "$dir")/tests"
+tests=("$tests_dir"/*.sql)
+if [ ${#tests[@]} -eq 0 ]; then
+  echo "  none found in $tests_dir"
+else
+  for t in $(printf '%s\n' "${tests[@]}" | sort); do
+    echo "  $(basename "$t")"
+    psql_q -f "$t"
+  done
+fi
 echo "All checks passed"
