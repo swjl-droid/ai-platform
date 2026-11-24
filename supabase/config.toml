@@ -1,0 +1,13 @@
+# Supabase CLI settings for the shared ai-platform database (ADR-01).
+# Remote project: ai-platform, ref wgmldytllyxzvdlvqgnq, Singapore.
+# Only the settings this repo needs; the CLI uses its defaults for the rest.
+
+project_id = "ai-platform"
+
+[api]
+# Schemas the Supabase API exposes. core stays out until the step 5 gateway
+# migration grants it to service_role (Hub row 179).
+schemas = ["public"]
+
+[db]
+major_version = 17
