@@ -1,0 +1,8 @@
+{
+  "_comment": "Apps that hold a stamped copy of the gateway (decision 25/11/2026, Hub row 217). Add an app here; nothing else changes.",
+  "source": "swjl-droid/ai-platform",
+  "apps": [
+    { "app": "prj01", "repo": "swjl-droid/prj01", "path": "lib/gateway" },
+    { "app": "prj02", "repo": "swjl-droid/prj02", "path": "lib/gateway" }
+  ]
+}

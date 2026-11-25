@@ -1,0 +1,14 @@
+{
+  "name": "ai-platform",
+  "private": true,
+  "type": "module",
+  "description": "Shared platform for John's AI builds: database migrations, LLM gateway, shared rules.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test 'gateway/test/*.test.js'",
+    "stamp:check": "node scripts/gateway/stamp.mjs check-source"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  }
+}
