@@ -40,8 +40,11 @@ for (const app of loadApps().apps.filter((a) => only.length === 0 || only.includ
     `- Folder \`${r.path}\` is replaced as a whole; \`STAMP.json\` lists every file's fingerprint.`,
     '- Do not edit the copy here: CI fails if it differs from its stamp. Change ai-platform/gateway instead.',
   ].join('\n');
-  const existing = run('gh', ['pr', 'list', '-R', app.repo, '--head', branch, '--json', 'url', '--jq', '.[0].url']);
-  const url = existing || run('gh', ['pr', 'create', '-R', app.repo, '--head', branch, '--base', 'main',
-    '--title', `Gateway ${r.version}`, '--body', body]);
+  // REST API only (works where GraphQL is not available).
+  const owner = app.repo.split('/')[0];
+  const existing = run('gh', ['api', `repos/${app.repo}/pulls?state=open&head=${owner}:${encodeURIComponent(branch)}`,
+    '--jq', '.[0].html_url // empty']);
+  const url = existing || run('gh', ['api', `repos/${app.repo}/pulls`, '-f', `title=Gateway ${r.version}`,
+    '-f', `head=${branch}`, '-f', 'base=main', '-f', `body=${body}`, '--jq', '.html_url']);
   console.log(`${app.repo}: ${url}`);
 }

@@ -30,5 +30,6 @@ jobs:
           apps="$(node -e 'for (const a of require("./gateway.apps.json").apps) console.log(`- [ ] ${a.repo} (${a.path})`)')"
           title="Copy gateway ${version} into the apps"
           body="$(printf 'Gateway **%s** is on main (commit %s).\n\nOpen one copy pull request per app:\n\n```\nnode scripts/gateway/open-copy-prs.mjs ../gateway-copies\n```\n\n%s\n\nClose this issue when every copy pull request is merged.' "$version" "${GITHUB_SHA::7}" "$apps")"
-          existing="$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')"
-          if [ -n "$existing" ]; then gh issue comment "$existing" --body "$body"; else gh issue create --title "$title" --body "$body"; fi
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --jq "map(select(.title == \"$title\" and (.pull_request | not)))[0].number // empty")"
+          if [ -n "$existing" ]; then gh api "repos/$GITHUB_REPOSITORY/issues/$existing/comments" -f body="$body" >/dev/null
+          else gh api "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -f body="$body" >/dev/null; fi
