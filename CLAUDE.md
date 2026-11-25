@@ -4,7 +4,7 @@ This repo is the shared platform for John's AI builds. Read this before changing
 
 ## What lives where (ADR-03)
 
-- **ai-platform (this repo):** shared database schema and migrations, the LLM gateway (step 5), shared rules.
+- **ai-platform (this repo):** shared database schema and migrations, the LLM gateway (`gateway/`, step 5), shared rules.
 - **prj01:** PM copilot. Vercel project `prj01` (team `swjl`).
 - **prj02:** Family orchestrator. Vercel project `prj02` (team `swjl`).
 
@@ -38,6 +38,30 @@ This repo is the shared platform for John's AI builds. Read this before changing
 ## Cost and tracing (step 5)
 
 - The gateway is shared code from this repo, built into each app (decision 23/11/2026, Hub row 192).
+- **Source once, stamped copies (decision 25/11/2026, Hub row 217):** the only source is `gateway/` here.
+  Each app in `gateway.apps.json` holds a copy in `lib/gateway` with a `STAMP.json` (version, commit,
+  SHA-256 of every file); the app's CI fails if the copy differs from its stamp. Never edit a copy:
+  change `gateway/`, bump `gateway/VERSION` (CI checks this), merge, then open the copy pull requests
+  with `node scripts/gateway/open-copy-prs.mjs <work-dir>`. A new app is one line in `gateway.apps.json`.
+- **Copy route A+, safeguards against forgetting (decision 25/11/2026, Hub row 220).** No token opens
+  pull requests across repos, so:
+  1. **Same session:** the session that opens a gateway pull request opens the copy pull requests right
+     after John merges it, and does not report the step done until both copies are merged.
+  2. **Hub action:** when a gateway pull request opens, add a Hub `Action` "Copy gateway x.y.z into
+     <apps>", Owner John + Claude, ETA = merge day + 1, with the links; close it (and the reminder issue)
+     only after checking both copies are merged and each app's newest Langfuse trace shows the new tag.
+  3. **Daily nudge:** `.github/workflows/gateway-release.yml` comments on and labels `overdue` any
+     "Copy gateway" reminder open for more than a day (08:47 SGT; GitHub e-mails John).
+  4. **Version tag:** every trace carries `gateway:<version>` (from `gateway/VERSION`).
+  Revisit a token (option B) once branch protection is decided (Hub row 214) and a third app or a
+  second person arrives (AIP-W2 US-1).
+- **Only priced models:** the gateway refuses a model missing from `gateway/pricing.js`. Add the model
+  with its price and source date before using it.
+- **Certificate checked:** the gateway trusts only Supabase Root 2021 CA (`gateway/supabase-root-2021.crt`,
+  fingerprint pinned in a test) and ignores any `sslmode` in `PLATFORM_DB_URL`. Never set
+  `rejectUnauthorized: false`; a test fails if anyone does (Hub row 204).
+- A failed ledger insert or trace never fails the model call; the result says what was logged
+  (`logged.ledger`, `logged.trace`) and the error kind (never the content or a key) goes to the function log.
 - Every model call goes through the gateway, which writes one `core.cost_ledger` row and one Langfuse trace per call.
 - Langfuse: one project per app in John's EU account (`https://cloud.langfuse.com`).
 - What a trace may contain is set per app by `TRACE_CONTENT` (decision 23/11/2026, Hub row 193):
@@ -46,6 +70,34 @@ This repo is the shared platform for John's AI builds. Read this before changing
   - `full`: only on preview deployments with made-up test data, never in production.
   - If the setting is missing or unknown, the gateway uses `none`.
 - `core.agent_runs` caps each run with `max_steps` and `max_cost_usd`; a run that hits a cap stops with `stopped_limit`.
+
+## Secret scan (platform plan condition 1, decision 25/11/2026, Hub row 211)
+
+- CI in ai-platform, prj01 and prj02 runs `scripts/ci/secret_scan.sh`: gitleaks (pinned image) over
+  every commit, then a self-test that plants a fake key in a throwaway folder and requires the scan to
+  catch it. A red secret scan blocks the merge. A real key found in history is revoked first, then removed.
+
+## Forget me (platform plan condition 2, decision 25/11/2026, Hub row 211)
+
+When a person asks to be forgotten, everything that identifies them is deleted or made anonymous,
+in every place the platform keeps it, and the request itself is recorded without their personal data.
+
+1. **Every table that holds personal data** has the person's key (`tenant_id`, `family_id`, `org_id` or a
+   user id) so their rows can be found. No personal data in a table without such a key.
+2. **One forget function per app** (`forget(personId)`) lists every table it clears; a new table with
+   personal data is added to it in the same pull request.
+3. **What happens to shared rows:** app rows are deleted; `core.audit_log` and `core.cost_ledger` keep
+   the row for accounting but lose the link (`tenant_id` set to null, `detail` emptied);
+   `core.agent_runs` steps and goals are emptied.
+4. **Langfuse:** traces carry the person's id as `userId` (never a name), so their traces can be found and
+   deleted in Langfuse. The gateway's keys cannot delete; John deletes them in Langfuse (or with a
+   short-lived admin key he creates and removes the same day).
+5. **Audit:** the request is logged in `core.audit_log` with action `forget`, the date and the counts
+   removed per table; no name, email or content.
+6. **CI test:** a forget-me test (create a person, add data everywhere, forget, check nothing is left)
+   ships in the same pull request as the first family or organisation table (condition 2).
+7. The time limit for answering a request is set in each app's privacy notice; backups follow
+   Supabase's retention.
 
 ## Working with John
 
