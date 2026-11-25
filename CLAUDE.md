@@ -77,6 +77,12 @@ This repo is the shared platform for John's AI builds. Read this before changing
   every commit, then a self-test that plants a fake key in a throwaway folder and requires the scan to
   catch it. A red secret scan blocks the merge. A real key found in history is revoked first, then removed.
 
+## Lint (AIP-W1 US-7, decision 25/11/2026, Hub row 226)
+
+- CI in ai-platform, prj01 and prj02 runs `scripts/ci/lint.sh`: ESLint (pinned, recommended rules,
+  `eslint.config.js`) over the repo, then a self-test with planted mistakes that must fail. A red lint
+  blocks the merge. The apps do not lint `lib/gateway` (it is linted here, at its source).
+
 ## Forget me (platform plan condition 2, decision 25/11/2026, Hub row 211)
 
 When a person asks to be forgotten, everything that identifies them is deleted or made anonymous,
