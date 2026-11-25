@@ -19,7 +19,9 @@ echo "  no secrets found in the history"
 echo "== 2. Self-test with a planted fake key"
 planted="$(mktemp -d)"
 trap 'rm -rf "$planted"' EXIT
-body="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 93)"
+# 93 random letters and digits (finite input, so no broken pipe under pipefail)
+body="$(openssl rand -base64 160 | LC_ALL=C tr -dc 'A-Za-z0-9' | cut -c1-93)"
+[ "${#body}" -eq 93 ] || { echo "  could not build the fake key"; exit 1; }
 printf 'ANTHROPIC_API_KEY=sk-ant-api03-%sAA\n' "$body" > "$planted/leak.env"
 chmod -R a+rX "$planted"
 if run_gitleaks "$planted" dir /scan --redact --no-banner >/dev/null 2>&1; then
