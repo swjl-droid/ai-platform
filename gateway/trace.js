@@ -7,7 +7,12 @@
 // A trace that fails to send never fails the model call: the key may lack rights or have expired
 // (renewal: Hub row 207), and the answer matters more than its trace.
 
+import { readFileSync } from 'node:fs';
 import { maskDeep } from './mask.js';
+
+// Gateway version, shown as tag gateway:<version> on every trace (safeguard 4, decision 25/11/2026):
+// a trace still showing the old version after a release means that app's copy is not live yet.
+export const GATEWAY_VERSION = readFileSync(new URL('./VERSION', import.meta.url), 'utf8').trim();
 
 const MODES = new Set(['none', 'masked', 'full']);
 
@@ -30,6 +35,7 @@ export function buildBatch({ mode, app, call, result, ids, now = () => new Date(
 
   const metadata = {
     app,
+    gatewayVersion: GATEWAY_VERSION,
     purpose: call.purpose,
     traceContent: mode,
     agentRunId: call.agentRunId ?? null,
@@ -52,7 +58,7 @@ export function buildBatch({ mode, app, call, result, ids, now = () => new Date(
           timestamp: result.startedAt,
           userId: call.tenantId ?? undefined, // a uuid, never a name: lets John find a person's traces
           sessionId: call.agentRunId ?? undefined,
-          tags: [app, call.purpose, `content:${mode}`],
+          tags: [app, call.purpose, `content:${mode}`, `gateway:${GATEWAY_VERSION}`],
           metadata,
           input,
           output,

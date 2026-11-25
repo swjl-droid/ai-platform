@@ -19,7 +19,7 @@
 import { randomUUID } from 'node:crypto';
 import { priceFor, costUsd } from './pricing.js';
 import { makeLedgerWriter } from './db.js';
-import { effectiveMode, buildBatch, sendTrace } from './trace.js';
+import { effectiveMode, buildBatch, sendTrace, GATEWAY_VERSION } from './trace.js';
 
 export const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 export const ANTHROPIC_VERSION = '2023-06-01';
@@ -125,12 +125,12 @@ export function createGateway({ app, env = process.env, fetchImpl = fetch, write
     ]);
     if (!traceOk) console.error('[gateway] Langfuse trace not accepted');
 
-    result.logged = { ledger: ledgerOutcome, trace: traceOk, traceContent: mode };
+    result.logged = { ledger: ledgerOutcome, trace: traceOk, traceContent: mode, gatewayVersion: GATEWAY_VERSION };
     if (!result.ok) {
       throw new GatewayError(errorType, `Model call failed (${errorType})`, { status: httpStatus, result });
     }
     return result;
   }
 
-  return { call, app, traceContent: mode };
+  return { call, app, traceContent: mode, version: GATEWAY_VERSION };
 }

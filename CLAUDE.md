@@ -43,6 +43,18 @@ This repo is the shared platform for John's AI builds. Read this before changing
   SHA-256 of every file); the app's CI fails if the copy differs from its stamp. Never edit a copy:
   change `gateway/`, bump `gateway/VERSION` (CI checks this), merge, then open the copy pull requests
   with `node scripts/gateway/open-copy-prs.mjs <work-dir>`. A new app is one line in `gateway.apps.json`.
+- **Copy route A+, safeguards against forgetting (decision 25/11/2026, Hub row 220).** No token opens
+  pull requests across repos, so:
+  1. **Same session:** the session that opens a gateway pull request opens the copy pull requests right
+     after John merges it, and does not report the step done until both copies are merged.
+  2. **Hub action:** when a gateway pull request opens, add a Hub `Action` "Copy gateway x.y.z into
+     <apps>", Owner John + Claude, ETA = merge day + 1, with the links; close it (and the reminder issue)
+     only after checking both copies are merged and each app's newest Langfuse trace shows the new tag.
+  3. **Daily nudge:** `.github/workflows/gateway-release.yml` comments on and labels `overdue` any
+     "Copy gateway" reminder open for more than a day (08:47 SGT; GitHub e-mails John).
+  4. **Version tag:** every trace carries `gateway:<version>` (from `gateway/VERSION`).
+  Revisit a token (option B) once branch protection is decided (Hub row 214) and a third app or a
+  second person arrives (AIP-W2 US-1).
 - **Only priced models:** the gateway refuses a model missing from `gateway/pricing.js`. Add the model
   with its price and source date before using it.
 - **Certificate checked:** the gateway trusts only Supabase Root 2021 CA (`gateway/supabase-root-2021.crt`,

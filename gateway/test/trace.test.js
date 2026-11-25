@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { effectiveMode, buildBatch, sendTrace } from '../trace.js';
+import { readFileSync } from 'node:fs';
+import { effectiveMode, buildBatch, sendTrace, GATEWAY_VERSION } from '../trace.js';
 
 const call = {
   purpose: 'test', model: 'claude-haiku-5-5', tenantId: '00000000-0000-0000-0000-000000000001',
@@ -63,4 +64,14 @@ test('sendTrace posts to /api/public/ingestion with basic auth', async () => {
   await sendTrace({ baseUrl: 'https://cloud.langfuse.com/', publicKey: 'pk', secretKey: 'sk', body: { batch: [] }, fetchImpl: f });
   assert.equal(seen.url, 'https://cloud.langfuse.com/api/public/ingestion');
   assert.equal(seen.init.headers.authorization, 'Basic ' + Buffer.from('pk:sk').toString('base64'));
+});
+
+test('every trace carries the gateway version tag (safeguard 4), read from VERSION', () => {
+  const v = readFileSync(new URL('../VERSION', import.meta.url), 'utf8').trim();
+  assert.equal(GATEWAY_VERSION, v);
+  for (const mode of ['none', 'masked', 'full']) {
+    const b = JSON.parse(json(mode)).batch;
+    assert.ok(b[0].body.tags.includes(`gateway:${v}`), mode);
+    assert.equal(b[1].body.metadata.gatewayVersion, v);
+  }
 });

@@ -1,15 +1,20 @@
 name: Gateway release
 
-# When a new gateway version reaches main, list the apps (gateway.apps.json) that need the
-# stamped copy, in one issue of this repo. GitHub's built-in token may write issues here but
-# cannot open pull requests in prj01 / prj02; the copy pull requests are opened with
-#   node scripts/gateway/open-copy-prs.mjs <work-dir>
-# by a session that can push to the app repos (no new secret, decision 25/11/2026).
+# Copy route A+ (decision 25/11/2026). No new secret: GitHub's built-in token may write issues in
+# this repo but cannot open pull requests in prj01 / prj02.
+# - announce: when a new gateway version reaches main, open (or update) one reminder issue listing
+#   the apps of gateway.apps.json. The copy pull requests are then opened with
+#   node scripts/gateway/open-copy-prs.mjs <work-dir>  by the session that made the change (safeguard 1).
+# - nudge (safeguard 3): every day at 08:47 SGT, each reminder open for more than a day gets a
+#   comment "still open, day N" (GitHub e-mails John) and the red label "overdue".
+# Safeguard 2 (Hub action) and 4 (gateway:<version> trace tag) live in CLAUDE.md and gateway/trace.js.
 
 on:
   push:
     branches: [main]
     paths: ["gateway/**", "gateway.apps.json"]
+  schedule:
+    - cron: "47 0 * * *" # 00:47 UTC = 08:47 SGT
   workflow_dispatch:
 
 permissions:
@@ -18,6 +23,7 @@ permissions:
 
 jobs:
   announce:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -29,7 +35,32 @@ jobs:
           version="$(cat gateway/VERSION)"
           apps="$(node -e 'for (const a of require("./gateway.apps.json").apps) console.log(`- [ ] ${a.repo} (${a.path})`)')"
           title="Copy gateway ${version} into the apps"
-          body="$(printf 'Gateway **%s** is on main (commit %s).\n\nOpen one copy pull request per app:\n\n```\nnode scripts/gateway/open-copy-prs.mjs ../gateway-copies\n```\n\n%s\n\nClose this issue when every copy pull request is merged.' "$version" "${GITHUB_SHA::7}" "$apps")"
+          body="$(printf 'Gateway **%s** is on main (commit %s).\n\nOpen one copy pull request per app:\n\n```\nnode scripts/gateway/open-copy-prs.mjs ../gateway-copies\n```\n\n%s\n\nClose this issue when every copy pull request is merged (and the Hub action with it).' "$version" "${GITHUB_SHA::7}" "$apps")"
           existing="$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --jq "map(select(.title == \"$title\" and (.pull_request | not)))[0].number // empty")"
           if [ -n "$existing" ]; then gh api "repos/$GITHUB_REPOSITORY/issues/$existing/comments" -f body="$body" >/dev/null
           else gh api "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -f body="$body" >/dev/null; fi
+
+  nudge:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Comment and label reminders open for more than a day
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/labels/overdue" >/dev/null 2>&1 || \
+            gh api "repos/$GITHUB_REPOSITORY/labels" -f name=overdue -f color=d73a4a -f description="Gateway copy not merged in time" >/dev/null
+          now="$(date -u +%s)"
+          gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" \
+            --jq '.[] | select((.pull_request | not) and (.title | startswith("Copy gateway "))) | "\(.number)\t\(.created_at)\t\(.title)"' |
+          while IFS=$'\t' read -r num created title; do
+            days=$(( (now - $(date -u -d "$created" +%s)) / 86400 ))
+            if [ "$days" -ge 1 ]; then
+              gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" \
+                -f body="Still open, day ${days}: ${title#Copy }. Open the copy pull requests (node scripts/gateway/open-copy-prs.mjs) and merge them, then close this issue." >/dev/null
+              gh api "repos/$GITHUB_REPOSITORY/issues/$num/labels" -f "labels[]=overdue" >/dev/null
+              echo "nudged #$num (day $days)"
+            fi
+          done
+          echo "done"

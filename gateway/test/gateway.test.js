@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGateway, ANTHROPIC_URL } from '../index.js';
+import { GATEWAY_VERSION } from '../trace.js';
 
 const FAKE_KEY = 'test-key-not-real';
 const env = (over = {}) => ({
@@ -33,7 +34,7 @@ test('a call writes one cost row and one trace, and returns the answer', async (
   const r = await gw.call(req);
   assert.equal(r.message.content[0].text, 'Hello Mary');
   assert.equal(r.costUsd, 0.00035);
-  assert.deepEqual(r.logged, { ledger: true, trace: true, traceContent: 'none' });
+  assert.deepEqual(r.logged, { ledger: true, trace: true, traceContent: 'none', gatewayVersion: GATEWAY_VERSION });
   assert.equal(f.calls.ledger.length, 1);
   const row = f.calls.ledger[0];
   assert.equal(row.app, 'prj01');
@@ -89,7 +90,7 @@ test('ledger or Langfuse failures do not lose the answer; they are reported in l
   const f = fakes({ ledgerFails: true, langfuse: { status: 401, body: {} } });
   const r = await createGateway({ app: 'prj01', env: env(), ...f }).call(req);
   assert.equal(r.message.content[0].text, 'Hello Mary');
-  assert.deepEqual(r.logged, { ledger: false, trace: false, traceContent: 'none' });
+  assert.deepEqual(r.logged, { ledger: false, trace: false, traceContent: 'none', gatewayVersion: GATEWAY_VERSION });
 });
 
 test('bad input and missing settings are refused', async () => {
