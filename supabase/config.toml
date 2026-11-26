@@ -5,9 +5,9 @@
 project_id = "ai-platform"
 
 [api]
-# Schemas the Supabase API exposes. core stays out until the step 5 gateway
-# migration grants it to service_role (Hub row 179).
-schemas = ["public"]
+# Schemas the Supabase API exposes. core stays out (server-only, CLAUDE.md rule 1).
+# app_prj01 is exposed for signed-in users, guarded by RLS (prj01-R1 US-1, Hub row 213).
+schemas = ["public", "app_prj01"]
 
 [db]
 major_version = 17

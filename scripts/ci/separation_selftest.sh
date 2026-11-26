@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Self-test of the separation and forget-me tests (Hub row 213): plants a leaky policy and a
+# forget() that keeps the sign-in account in a copy of the migrations, on a second throwaway
+# database, and requires check_migrations.sh to fail each time. Proves a green run means something.
+# Needs: psql on PATH and PG* variables pointing at a server where a database can be created.
+set -euo pipefail
+dir="${1:-supabase/migrations}"
+here="$(cd "$(dirname "$0")" && pwd)"
+mutations=(
+  's/for select to authenticated using (app_[a-z0-9]*\.is_member(org_id));/for select to authenticated using (true);/|a policy that lets everyone read'
+  's/^  delete from auth\.users where id = p_user;/  -- planted: account kept/|a forget() that keeps the sign-in account'
+)
+fail=0
+for m in "${mutations[@]}"; do
+  expr="${m%%|*}"; what="${m##*|}"
+  work="$(mktemp -d)"; mkdir -p "$work/migrations"; cp -r "$(dirname "$dir")/tests" "$work/tests"
+  for f in "$dir"/*.sql; do sed "$expr" "$f" > "$work/migrations/$(basename "$f")"; done
+  if diff -rq "$dir" "$work/migrations" >/dev/null; then echo "FAIL: mutation did not apply ($what)"; fail=1; continue; fi
+  db="selftest_$RANDOM"
+  psql -X -q -d "${PGDATABASE:-postgres}" -c "create database $db" >/dev/null
+  if PGDATABASE="$db" bash "$here/check_migrations.sh" "$work/migrations" >/dev/null 2>&1; then
+    echo "FAIL: the tests passed with $what"; fail=1
+  else
+    echo "caught: $what"
+  fi
+  psql -X -q -d "${PGDATABASE:-postgres}" -c "drop database $db" >/dev/null
+done
+exit $fail

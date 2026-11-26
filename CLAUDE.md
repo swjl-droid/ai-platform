@@ -24,6 +24,23 @@ This repo is the shared platform for John's AI builds. Read this before changing
 6. **CI must pass** (`.github/workflows/ci.yml`): it applies every migration on a throwaway Postgres 17, checks rules 1 and 3, then runs every behaviour test in `supabase/tests/`.
 7. **Gateway roles:** `gateway_prj01` and `gateway_prj02` may only insert `core.cost_ledger` rows of their own app (insert-only RLS policy, no read, update or delete). The gateway never uses `INSERT ... RETURNING`. Each new right is a new migration with a behaviour test in `supabase/tests/`.
 
+## Tenant separation (platform plan condition 3, Hub rows 211 and 213)
+
+No organisation or family is onboarded before this holds and CI proves it.
+
+1. **Every table in an app schema** (`app_prj01`, `app_prj02`, ...) carries the tenant key: `org_id`
+   (prj01) or `family_id` (prj02). The one table that defines the tenant (`orgs`, `families`) says
+   `tenant root` in its table comment.
+2. **RLS on, with a policy, on every app table.** A signed-in user reaches only rows of tenants they
+   are a member of, through the app's `is_member()` check. `anon` gets nothing in an app schema.
+3. **CI checks it** (`scripts/ci/check_migrations.sh`, step 4): an app table with RLS off, no policy or
+   no tenant key fails the build.
+4. **Two-user test per app** in `supabase/tests/<app>_separation_test.sql`: user B sees, changes and
+   adds nothing in user A's tenant. `scripts/ci/separation_selftest.sh` plants a leaky policy and
+   requires the tests to fail.
+5. A new app table comes with its policy and its lines in the app's separation and forget-me tests,
+   in the same pull request.
+
 ## Keys and secrets
 
 - John stores every key himself in Vercel (project, Settings, Environment Variables, type **Sensitive**).
@@ -91,7 +108,8 @@ in every place the platform keeps it, and the request itself is recorded without
 1. **Every table that holds personal data** has the person's key (`tenant_id`, `family_id`, `org_id` or a
    user id) so their rows can be found. No personal data in a table without such a key.
 2. **One forget function per app** (`forget(personId)`) lists every table it clears; a new table with
-   personal data is added to it in the same pull request.
+   personal data is added to it in the same pull request. prj01: `app_prj01.forget(user)` (server) and
+   `app_prj01.forget_me()` (the signed-in person).
 3. **What happens to shared rows:** app rows are deleted; `core.audit_log` and `core.cost_ledger` keep
    the row for accounting but lose the link (`tenant_id` set to null, `detail` emptied);
    `core.agent_runs` steps and goals are emptied.
@@ -102,6 +120,7 @@ in every place the platform keeps it, and the request itself is recorded without
    removed per table; no name, email or content.
 6. **CI test:** a forget-me test (create a person, add data everywhere, forget, check nothing is left)
    ships in the same pull request as the first family or organisation table (condition 2).
+   prj01: `supabase/tests/prj01_forget_test.sql`.
 7. The time limit for answering a request is set in each app's privacy notice; backups follow
    Supabase's retention.
 
