@@ -18,7 +18,7 @@ This repo is the shared platform for John's AI builds. Read this before changing
 
 1. **`core` is server-only.** RLS is on for every `core` table; policies exist only for the dedicated server roles (rule 7). `anon` and `authenticated` never get access to `core`. Only server code reaches it.
 2. **Every schema change is a migration file** in `supabase/migrations/`. Never change the database by hand.
-3. **Name each migration file from the version Supabase records:** `YYYYMMDDHHMMSS_name.sql`, read back from `supabase_migrations.schema_migrations` after applying. The repo and the database history must match.
+3. **Name each migration file from the version Supabase records:** `YYYYMMDDHHMMSS_name.sql`, read back from `supabase_migrations.schema_migrations` after applying. The repo and the database history must match. Order (decision 26/11/2026, Hub row 236): open the pull request with a provisional version; John reviews and says "yes, apply"; Claude applies it, renames the file to the recorded version and pushes; CI goes green; John merges. Never apply before John's yes.
 4. **Never edit a migration that has been applied.** Fix forward with a new migration.
 5. **Every migration states its grants.** A new schema or table says who may use it. Nothing uses the Supabase secret (service role) key: server code reaches `core` only through a dedicated role with the smallest rights it needs.
 6. **CI must pass** (`.github/workflows/ci.yml`): it applies every migration on a throwaway Postgres 17, checks rules 1 and 3, then runs every behaviour test in `supabase/tests/`.

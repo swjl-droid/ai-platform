@@ -26,6 +26,21 @@ begin
   perform set_config('test.shared', v_shared::text, true);
 end $$;
 
+-- A schedule in the person's own organisation, and one they imported into the shared organisation.
+set local role authenticated;
+select set_config('test.sched_own', app_prj01.import_schedule(
+  (select id from app_prj01.projects where org_id = current_setting('test.org')::uuid order by name limit 1),
+  'PMI-PMBOK', 'own.csv',
+  '[{"key":"T1","name":"Design","type":"Task","start":"2026-10-01","finish":"2026-10-07"},
+    {"key":"T2","name":"Build","type":"Task","start":"2026-10-08","finish":"2026-10-19"}]'::jsonb,
+  '[{"from":"T1","to":"T2"}]'::jsonb)::text, true);
+select set_config('test.sched_shared', app_prj01.import_schedule(
+  (select id from app_prj01.projects where org_id = current_setting('test.shared')::uuid),
+  'Hybrid', 'shared.csv',
+  '[{"key":"G1","name":"Gate 1","type":"Macro Waterfall","start":"2026-10-07","finish":"2026-10-07"}]'::jsonb,
+  '[]'::jsonb)::text, true);
+reset role;
+
 -- Data in core: a cost row, an agent run, an audit row naming the person.
 insert into core.cost_ledger (app, tenant_id, provider, model, purpose)
   values ('prj01', current_setting('test.org')::uuid, 'anthropic', 'test-model', 'ci-test');
@@ -60,6 +75,14 @@ begin
   if n <> 1 then raise exception 'shared organisation lost its project'; end if;
   select count(*) into n from app_prj01.members where org_id = v_shared;
   if n <> 1 then raise exception 'shared organisation has % members, expected 1', n; end if;
+  -- Schedules: the own organisation's are gone; the shared one stays, no longer linked to the person.
+  select count(*) into n from app_prj01.schedules where id = current_setting('test.sched_own')::uuid;
+  if n <> 0 then raise exception 'own schedule left'; end if;
+  select count(*) into n from app_prj01.schedule_items where schedule_id = current_setting('test.sched_own')::uuid;
+  if n <> 0 then raise exception '% own schedule items left', n; end if;
+  select count(*) into n from app_prj01.schedules
+   where id = current_setting('test.sched_shared')::uuid and imported_by is null;
+  if n <> 1 then raise exception 'shared schedule lost, or still linked to the person'; end if;
   -- core: rows kept, link removed.
   select count(*) into n from core.cost_ledger where tenant_id = v_org;
   if n <> 0 then raise exception 'cost rows still linked'; end if;
@@ -73,7 +96,9 @@ begin
   -- The request is logged, with counts and nothing that identifies the person.
   select detail into d from core.audit_log where app = 'prj01' and action = 'forget' order by id desc limit 1;
   if d is null then raise exception 'forget request not logged'; end if;
-  if (d ->> 'app_prj01.projects')::int <> 3 or (d ->> 'auth.users')::int <> 1 then
+  if (d ->> 'app_prj01.projects')::int <> 3 or (d ->> 'auth.users')::int <> 1
+     or (d ->> 'app_prj01.schedules')::int <> 1 or (d ->> 'app_prj01.schedule_items')::int <> 2
+     or (d ->> 'app_prj01.schedule_links')::int <> 1 or (d ->> 'app_prj01.schedules_unlinked')::int <> 1 then
     raise exception 'forget log counts wrong: %', d;
   end if;
   if d::text like '%' || v_user::text || '%' or d::text like '%@%' then
