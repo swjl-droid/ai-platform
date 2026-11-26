@@ -41,6 +41,16 @@ select set_config('test.sched_shared', app_prj01.import_schedule(
   '[]'::jsonb)::text, true);
 reset role;
 
+-- A transcript in the own organisation, and one dropped into the shared organisation.
+set local role authenticated;
+insert into app_prj01.transcripts (org_id, project_id, source_name, content, content_sha256, status)
+  values (current_setting('test.org')::uuid,
+          (select id from app_prj01.projects where org_id = current_setting('test.org')::uuid order by name limit 1),
+          'own.txt', repeat('The person speaks in the clinic sync. ', 10), repeat('d', 64), 'matched');
+insert into app_prj01.transcripts (org_id, source_name, content, content_sha256, status)
+  values (current_setting('test.shared')::uuid, 'shared.txt', repeat('Shared organisation meeting notes. ', 10), repeat('e', 64), 'needs_choice');
+reset role;
+
 -- Data in core: a cost row, an agent run, an audit row naming the person.
 insert into core.cost_ledger (app, tenant_id, provider, model, purpose)
   values ('prj01', current_setting('test.org')::uuid, 'anthropic', 'test-model', 'ci-test');
@@ -83,6 +93,11 @@ begin
   select count(*) into n from app_prj01.schedules
    where id = current_setting('test.sched_shared')::uuid and imported_by is null;
   if n <> 1 then raise exception 'shared schedule lost, or still linked to the person'; end if;
+  -- Transcripts: the own organisation's are gone; the shared one stays, unlinked from the person.
+  select count(*) into n from app_prj01.transcripts where org_id = v_org;
+  if n <> 0 then raise exception '% own transcripts left', n; end if;
+  select count(*) into n from app_prj01.transcripts where org_id = v_shared and uploaded_by is null;
+  if n <> 1 then raise exception 'shared transcript lost, or still linked to the person'; end if;
   -- core: rows kept, link removed.
   select count(*) into n from core.cost_ledger where tenant_id = v_org;
   if n <> 0 then raise exception 'cost rows still linked'; end if;
@@ -98,7 +113,8 @@ begin
   if d is null then raise exception 'forget request not logged'; end if;
   if (d ->> 'app_prj01.projects')::int <> 3 or (d ->> 'auth.users')::int <> 1
      or (d ->> 'app_prj01.schedules')::int <> 1 or (d ->> 'app_prj01.schedule_items')::int <> 2
-     or (d ->> 'app_prj01.schedule_links')::int <> 1 or (d ->> 'app_prj01.schedules_unlinked')::int <> 1 then
+     or (d ->> 'app_prj01.schedule_links')::int <> 1 or (d ->> 'app_prj01.schedules_unlinked')::int <> 1
+     or (d ->> 'app_prj01.transcripts')::int <> 1 or (d ->> 'app_prj01.transcripts_unlinked')::int <> 1 then
     raise exception 'forget log counts wrong: %', d;
   end if;
   if d::text like '%' || v_user::text || '%' or d::text like '%@%' then

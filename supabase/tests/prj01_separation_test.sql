@@ -154,6 +154,70 @@ begin
   if not blocked then raise exception 'user B tied a schedule to user A''s project'; end if;
 end $$;
 
+-- Transcripts (prj01-R1 US-3): user A drops one; user B sees, changes, confirms and adds nothing of it.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-a000-00000000000a","role":"authenticated"}', true);
+do $$
+declare v_id uuid; n int; blocked boolean;
+begin
+  insert into app_prj01.transcripts (org_id, project_id, source_name, content, content_sha256, status)
+    values (current_setting('test.org_a')::uuid, current_setting('test.project_a')::uuid, 'a.txt',
+            repeat('Weekly sync of the clinic relocation. ', 10), repeat('a', 64), 'matched')
+    returning id into v_id;
+  perform set_config('test.transcript_a', v_id::text, true);
+  -- The same text again in the same organisation is refused.
+  blocked := false;
+  begin
+    insert into app_prj01.transcripts (org_id, project_id, source_name, content, content_sha256, status)
+      values (current_setting('test.org_a')::uuid, current_setting('test.project_a')::uuid, 'again.txt',
+              repeat('Weekly sync of the clinic relocation. ', 10), repeat('a', 64), 'matched');
+  exception when unique_violation then blocked := true;
+  end;
+  if not blocked then raise exception 'the same transcript was stored twice'; end if;
+  -- The text itself cannot be changed.
+  blocked := false;
+  begin
+    update app_prj01.transcripts set content = repeat('x', 300) where id = v_id;
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'a transcript text could be changed'; end if;
+end $$;
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-a000-00000000000b","role":"authenticated"}', true);
+do $$
+declare
+  v_tr_a  uuid := current_setting('test.transcript_a')::uuid;
+  v_org_a uuid := current_setting('test.org_a')::uuid;
+  v_project_a uuid := current_setting('test.project_a')::uuid;
+  v_org_b uuid;
+  n int;
+  blocked boolean;
+begin
+  select count(*) into n from app_prj01.transcripts where id = v_tr_a;
+  if n <> 0 then raise exception 'user B sees user A''s transcript'; end if;
+  update app_prj01.transcripts set status = 'confirmed' where id = v_tr_a;
+  get diagnostics n = row_count;
+  if n <> 0 then raise exception 'user B confirmed user A''s transcript'; end if;
+  delete from app_prj01.transcripts where id = v_tr_a;
+  get diagnostics n = row_count;
+  if n <> 0 then raise exception 'user B deleted user A''s transcript'; end if;
+  blocked := false;
+  begin
+    insert into app_prj01.transcripts (org_id, source_name, content, content_sha256, status)
+      values (v_org_a, 'planted.txt', repeat('planted text ', 30), repeat('b', 64), 'needs_choice');
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'user B dropped a transcript into user A''s organisation'; end if;
+  -- B cannot tie a transcript of B's organisation to A's project.
+  select org_id into v_org_b from app_prj01.members limit 1;
+  blocked := false;
+  begin
+    insert into app_prj01.transcripts (org_id, project_id, source_name, content, content_sha256, status)
+      values (v_org_b, v_project_a, 'b.txt', repeat('text of b ', 30), repeat('c', 64), 'confirmed');
+  exception when foreign_key_violation or insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'user B tied a transcript to user A''s project'; end if;
+end $$;
+
 -- Nobody signed in (anon) gets nothing at all.
 reset role;
 set local role anon;
@@ -171,6 +235,12 @@ begin
   exception when insufficient_privilege then blocked := true;
   end;
   if not blocked then raise exception 'anon could read app_prj01.schedule_items'; end if;
+  blocked := false;
+  begin
+    perform count(*) from app_prj01.transcripts;
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'anon could read app_prj01.transcripts'; end if;
 end $$;
 
 reset role;
