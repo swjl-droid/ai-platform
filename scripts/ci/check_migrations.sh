@@ -40,6 +40,15 @@ begin
 end $$;
 -- Hosted Supabase grants these on public by default; mirror that so revokes are tested.
 grant usage on schema public to anon, authenticated, service_role;
+-- Supabase Auth stand-in: auth.users and auth.uid() as the hosted project has them. auth.uid()
+-- reads the signed-in user from request.jwt.claims, the setting PostgREST fills from the token.
+create schema if not exists auth;
+create table if not exists auth.users (id uuid primary key, email text);
+create or replace function auth.uid() returns uuid language sql stable as $f$
+  select nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub', '')::uuid
+$f$;
+grant usage on schema auth to anon, authenticated, service_role;
+grant execute on function auth.uid() to anon, authenticated, service_role;
 SQL
 
 echo "== 3. Apply migrations in order"
@@ -74,12 +83,37 @@ begin
       failures := failures || format(E'\n  core.%s is missing', r.t);
     end if;
   end loop;
+  -- Tenant separation (CLAUDE.md): every table in an app schema has RLS on, at least one
+  -- policy, and the tenant key (org_id or family_id), unless its comment marks it 'tenant root'.
+  -- anon gets nothing in an app schema.
+  for r in
+    select n.nspname, c.relname, c.oid, c.relrowsecurity
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname like 'app\_%' and c.relkind in ('r', 'p')
+  loop
+    if not r.relrowsecurity then
+      failures := failures || format(E'\n  %s.%s has RLS off', r.nspname, r.relname);
+    end if;
+    if not exists (select 1 from pg_policy p where p.polrelid = r.oid) then
+      failures := failures || format(E'\n  %s.%s has no RLS policy', r.nspname, r.relname);
+    end if;
+    if not exists (select 1 from pg_attribute a where a.attrelid = r.oid and not a.attisdropped
+                   and a.attname in ('org_id', 'family_id'))
+       and coalesce(obj_description(r.oid, 'pg_class'), '') not like 'tenant root%' then
+      failures := failures || format(E'\n  %s.%s has no org_id or family_id', r.nspname, r.relname);
+    end if;
+  end loop;
+  for r in select nspname from pg_namespace where nspname like 'app\_%' loop
+    if has_schema_privilege('anon', r.nspname, 'USAGE') then
+      failures := failures || format(E'\n  anon has USAGE on schema %s', r.nspname);
+    end if;
+  end loop;
   if failures <> '' then
     raise exception 'Rule check failed:%', failures;
   end if;
 end $$;
 SQL
-echo "  core is server-only, RLS is on, the shared tables exist"
+echo "  core is server-only, RLS is on, the shared tables exist; app tables are separated by tenant"
 
 echo "== 5. Behaviour tests"
 tests_dir="$(dirname "$dir")/tests"

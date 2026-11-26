@@ -36,6 +36,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Apply migrations and check the rules
         run: bash scripts/ci/check_migrations.sh supabase/migrations
+      - name: Separation and forget-me tests catch planted mistakes (Hub row 213)
+        run: bash scripts/ci/separation_selftest.sh supabase/migrations
 
   gateway:
     name: Gateway tests and stamp
