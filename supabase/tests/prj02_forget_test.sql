@@ -73,6 +73,35 @@ insert into core.cost_ledger (app, tenant_id, provider, model, purpose)
 insert into core.agent_runs (app, tenant_id, goal, steps)
   values ('prj02', current_setting('test.family')::uuid, 'Remind Forget Me about swimming', '[{"step":1}]');
 
+-- Person 1 starts an own plan for a clash (prj02-R1 US-6).
+insert into app_prj02.reminders (family_id, trip_id, person_id, kind, send_at, payload)
+  values (current_setting('test.family')::uuid, current_setting('test.trip')::uuid, current_setting('test.p1')::uuid,
+          'clash', now(), jsonb_build_object('trips', jsonb_build_array(current_setting('test.trip'))));
+set local role app_prj02_bot;
+do $$
+declare r jsonb;
+begin
+  perform app_prj02.begin_request('telegram', '7000000001');
+  r := app_prj02.plan_await((select id from app_prj02.reminders where kind = 'clash' limit 0), 30);
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'an empty clash was accepted: %', r; end if;
+end $$;
+reset role;
+do $$
+declare v uuid;
+begin
+  select id into v from app_prj02.reminders where kind = 'clash' and person_id = current_setting('test.p1')::uuid;
+  perform set_config('test.clash', v::text, true);
+end $$;
+set local role app_prj02_bot;
+do $$
+declare r jsonb;
+begin
+  perform app_prj02.begin_request('telegram', '7000000001');
+  r := app_prj02.plan_await(current_setting('test.clash')::uuid, 30);
+  if (r ->> 'ok')::boolean is not true then raise exception 'own plan not started: %', r; end if;
+end $$;
+reset role;
+
 -- Person 1 forgets themselves from the bot.
 set local role app_prj02_bot;
 do $$
@@ -93,6 +122,10 @@ declare
   n int;
   d jsonb;
 begin
+  select count(*) into n from app_prj02.trip_plans where person_id = v_p1;
+  if n <> 0 then raise exception 'own plans of the forgotten person left'; end if;
+  select detail into d from core.audit_log where app = 'prj02' and action = 'forget' order by id desc limit 1;
+  if coalesce((d ->> 'app_prj02.trip_plans')::int, -1) <> 1 then raise exception 'forget log does not count the own plan: %', d; end if;
   select count(*) into n from app_prj02.people where id = v_p1;
   if n <> 0 then raise exception 'person 1 still there'; end if;
   select count(*) into n from app_prj02.contacts where external_id = '7000000001';
@@ -117,7 +150,7 @@ begin
      or coalesce((d ->> 'app_prj02.consents')::int, -1) <> 2 or coalesce((d ->> 'app_prj02.families')::int, -1) <> 0
      or coalesce((d ->> 'app_prj02.invites_unlinked')::int, -1) <> 3
      or coalesce((d ->> 'app_prj02.calendar_changes_unlinked')::int, -1) <> 2 or coalesce((d ->> 'core.agent_runs_unlinked')::int, -1) <> 1
-     or coalesce((d ->> 'app_prj02.trips_unlinked')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.reminders')::int, -1) <> 3 then
+     or coalesce((d ->> 'app_prj02.trips_unlinked')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.reminders')::int, -1) <> 4 then -- plan, drop, pick and the clash of the own plan (US-6)
     raise exception 'first forget log counts wrong: %', d;
   end if;
   -- Calendar changes stay in the family's log without the person; the waiting run lost its link.
