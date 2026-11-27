@@ -1,6 +1,6 @@
 -- ai-platform: first tenant tables of prj02 (Family orchestrator), story prj02-R1 US-1 (bot and
 -- join flow) and Hub row 213 (platform plan conditions 2 and 3, Hub row 211).
--- PROVISIONAL VERSION: renamed to the version Supabase records once applied (CLAUDE.md rule 3).
+-- Applied 27/11/2026 after John's "yes, apply"; file named from the recorded version (CLAUDE.md rule 3).
 --
 -- Who is asking (decision 27/11/2026, Hub row 249, option A). prj02 users talk to Telegram, not to
 -- Supabase Auth, so nobody signs in to the database. The bot's server code connects as the
