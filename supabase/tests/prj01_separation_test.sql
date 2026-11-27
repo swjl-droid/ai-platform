@@ -218,6 +218,79 @@ begin
   if not blocked then raise exception 'user B tied a transcript to user A''s project'; end if;
 end $$;
 
+-- Minutes (prj01-R1 US-4): user A drafts minutes of A's transcript and approves them; user B sees,
+-- approves, deletes and adds nothing of them.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-a000-00000000000a","role":"authenticated"}', true);
+do $$
+declare v_id uuid; n int; blocked boolean;
+begin
+  insert into app_prj01.minutes (org_id, transcript_id, project_id, content, checks, template, model)
+    values (current_setting('test.org_a')::uuid, current_setting('test.transcript_a')::uuid, current_setting('test.project_a')::uuid,
+            '{"meeting":{"title":"Weekly sync"},"topics":[]}', '{"ok":true}', 'default v2', 'test-model')
+    returning id into v_id;
+  perform set_config('test.minutes_a', v_id::text, true);
+  -- Minutes cannot be stored as already approved, nor approved in someone else's name.
+  blocked := false;
+  begin
+    insert into app_prj01.minutes (org_id, transcript_id, project_id, version, content, template, model, status, approved_at)
+      values (current_setting('test.org_a')::uuid, current_setting('test.transcript_a')::uuid, current_setting('test.project_a')::uuid,
+              2, '{"topics":[]}', 'default v2', 'test-model', 'approved', now());
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'minutes were stored already approved'; end if;
+  blocked := false;
+  begin
+    update app_prj01.minutes set status = 'approved', approved_at = now(), approved_by = '00000000-0000-4000-a000-00000000000b' where id = v_id;
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'minutes were approved in someone else''s name'; end if;
+  -- The content cannot be changed after drafting.
+  blocked := false;
+  begin
+    update app_prj01.minutes set content = '{"topics":[]}' where id = v_id;
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'minutes content could be changed'; end if;
+  -- A approves as themselves.
+  update app_prj01.minutes set status = 'approved', approved_at = now(), approved_by = auth.uid() where id = v_id;
+  get diagnostics n = row_count;
+  if n <> 1 then raise exception 'user A could not approve their own organisation''s minutes'; end if;
+end $$;
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-a000-00000000000b","role":"authenticated"}', true);
+do $$
+declare
+  v_mi_a uuid := current_setting('test.minutes_a')::uuid;
+  v_tr_a uuid := current_setting('test.transcript_a')::uuid;
+  v_org_a uuid := current_setting('test.org_a')::uuid;
+  v_project_a uuid := current_setting('test.project_a')::uuid;
+  v_org_b uuid;
+  n int;
+  blocked boolean;
+begin
+  select count(*) into n from app_prj01.minutes where id = v_mi_a;
+  if n <> 0 then raise exception 'user B sees user A''s minutes'; end if;
+  delete from app_prj01.minutes where id = v_mi_a;
+  get diagnostics n = row_count;
+  if n <> 0 then raise exception 'user B deleted user A''s minutes'; end if;
+  blocked := false;
+  begin
+    insert into app_prj01.minutes (org_id, transcript_id, project_id, version, content, template, model)
+      values (v_org_a, v_tr_a, v_project_a, 3, '{"topics":[]}', 'default v2', 'test-model');
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'user B added minutes to user A''s organisation'; end if;
+  -- B cannot tie minutes of B's organisation to A's transcript.
+  select org_id into v_org_b from app_prj01.members limit 1;
+  blocked := false;
+  begin
+    insert into app_prj01.minutes (org_id, transcript_id, project_id, content, template, model)
+      values (v_org_b, v_tr_a, v_project_a, '{"topics":[]}', 'default v2', 'test-model');
+  exception when foreign_key_violation or insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'user B tied minutes to user A''s transcript'; end if;
+end $$;
+
 -- Nobody signed in (anon) gets nothing at all.
 reset role;
 set local role anon;
@@ -241,6 +314,12 @@ begin
   exception when insufficient_privilege then blocked := true;
   end;
   if not blocked then raise exception 'anon could read app_prj01.transcripts'; end if;
+  blocked := false;
+  begin
+    perform count(*) from app_prj01.minutes;
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'anon could read app_prj01.minutes'; end if;
 end $$;
 
 reset role;

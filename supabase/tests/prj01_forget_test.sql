@@ -49,6 +49,17 @@ insert into app_prj01.transcripts (org_id, project_id, source_name, content, con
           'own.txt', repeat('The person speaks in the clinic sync. ', 10), repeat('d', 64), 'matched');
 insert into app_prj01.transcripts (org_id, source_name, content, content_sha256, status)
   values (current_setting('test.shared')::uuid, 'shared.txt', repeat('Shared organisation meeting notes. ', 10), repeat('e', 64), 'needs_choice');
+-- Minutes of the own transcript, and minutes the person drafted and approved in the shared organisation.
+insert into app_prj01.minutes (org_id, transcript_id, project_id, content, template, model)
+  select org_id, id, project_id, '{"meeting":{"title":"Own sync"},"topics":[]}', 'default v2', 'test-model'
+    from app_prj01.transcripts where org_id = current_setting('test.org')::uuid;
+update app_prj01.transcripts set project_id = (select id from app_prj01.projects where org_id = current_setting('test.shared')::uuid), status = 'confirmed', confirmed_at = now()
+ where org_id = current_setting('test.shared')::uuid;
+insert into app_prj01.minutes (org_id, transcript_id, project_id, content, template, model)
+  select org_id, id, project_id, '{"meeting":{"title":"Shared sync"},"topics":[]}', 'default v2', 'test-model'
+    from app_prj01.transcripts where org_id = current_setting('test.shared')::uuid;
+update app_prj01.minutes set status = 'approved', approved_at = now(), approved_by = auth.uid()
+ where org_id = current_setting('test.shared')::uuid;
 reset role;
 
 -- Data in core: a cost row, an agent run, an audit row naming the person.
@@ -98,6 +109,11 @@ begin
   if n <> 0 then raise exception '% own transcripts left', n; end if;
   select count(*) into n from app_prj01.transcripts where org_id = v_shared and uploaded_by is null;
   if n <> 1 then raise exception 'shared transcript lost, or still linked to the person'; end if;
+  -- Minutes: the own organisation's are gone; the shared ones stay, unlinked from the person.
+  select count(*) into n from app_prj01.minutes where org_id = v_org;
+  if n <> 0 then raise exception '% own minutes left', n; end if;
+  select count(*) into n from app_prj01.minutes where org_id = v_shared and created_by is null and approved_by is null;
+  if n <> 1 then raise exception 'shared minutes lost, or still linked to the person'; end if;
   -- core: rows kept, link removed.
   select count(*) into n from core.cost_ledger where tenant_id = v_org;
   if n <> 0 then raise exception 'cost rows still linked'; end if;
@@ -114,7 +130,8 @@ begin
   if (d ->> 'app_prj01.projects')::int <> 3 or (d ->> 'auth.users')::int <> 1
      or (d ->> 'app_prj01.schedules')::int <> 1 or (d ->> 'app_prj01.schedule_items')::int <> 2
      or (d ->> 'app_prj01.schedule_links')::int <> 1 or (d ->> 'app_prj01.schedules_unlinked')::int <> 1
-     or (d ->> 'app_prj01.transcripts')::int <> 1 or (d ->> 'app_prj01.transcripts_unlinked')::int <> 1 then
+     or (d ->> 'app_prj01.transcripts')::int <> 1 or (d ->> 'app_prj01.transcripts_unlinked')::int <> 1
+     or (d ->> 'app_prj01.minutes')::int <> 1 or (d ->> 'app_prj01.minutes_unlinked')::int <> 1 then
     raise exception 'forget log counts wrong: %', d;
   end if;
   if d::text like '%' || v_user::text || '%' or d::text like '%@%' then
