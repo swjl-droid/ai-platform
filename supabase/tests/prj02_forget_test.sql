@@ -63,7 +63,8 @@ do $$
 begin
   perform app_prj02.begin_request('telegram', '7000000002');
   perform app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', current_setting('test.trip')::uuid,
-    'mode', 'adult', 'person', current_setting('test.p1')::uuid)));
+    'mode', 'adult', 'person', current_setting('test.p1')::uuid, 'drop_person', current_setting('test.p1'),
+    'pick_person', current_setting('test.p1'))));
 end $$;
 reset role;
 
@@ -131,6 +132,8 @@ declare
   n int;
   d jsonb;
 begin
+  select count(*) into n from app_prj02.trips where drop_person = v_p1 or pick_person = v_p1;
+  if n <> 0 then raise exception 'the forgotten person is still the adult of a drop-off or pick-up'; end if;
   select count(*) into n from app_prj02.trip_plans where person_id = v_p1;
   if n <> 0 then raise exception 'own plans of the forgotten person left'; end if;
   select detail into d from core.audit_log where app = 'prj02' and action = 'forget' order by id desc limit 1;
