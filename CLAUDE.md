@@ -89,7 +89,11 @@ No organisation or family is onboarded before this holds and CI proves it.
   `rejectUnauthorized: false`; a test fails if anyone does (Hub row 204).
 - A failed ledger insert or trace never fails the model call; the result says what was logged
   (`logged.ledger`, `logged.trace`) and the error kind (never the content or a key) goes to the function log.
-- Every model call goes through the gateway, which writes one `core.cost_ledger` row and one Langfuse trace per call.
+- Every model call from app code goes through the gateway, which writes one `core.cost_ledger` row and one Langfuse trace per call.
+- **Builder-only model work runs on John's plan, not the API (decision 27/11/2026, Hub row 311):** judges, mock
+  data, labels and any model work only the builder benefits from run in a Claude session, and their results are
+  saved in the repo. The API (through the gateway) is only for what end users trigger and for re-drafting
+  evaluation outputs through the app's own code, since that is what an evaluation proves.
 - Langfuse: one project per app in John's EU account (`https://cloud.langfuse.com`).
 - What a trace may contain is set per app by `TRACE_CONTENT` (decision 23/11/2026, Hub row 193):
   - `none`: cost, tokens, timing, status, error type and run id only; no prompt or answer. prj02 uses this (children's data).
