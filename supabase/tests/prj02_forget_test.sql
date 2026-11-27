@@ -73,6 +73,15 @@ insert into core.cost_ledger (app, tenant_id, provider, model, purpose)
 insert into core.agent_runs (app, tenant_id, goal, steps)
   values ('prj02', current_setting('test.family')::uuid, 'Remind Forget Me about swimming', '[{"step":1}]');
 
+-- The family's children (prj02-R1 US-7): deleted with the family.
+set local role app_prj02_bot;
+do $$
+begin
+  perform app_prj02.begin_request('telegram', '7000000002');
+  perform app_prj02.child_save('Forget Me Junior', array['FMJ']);
+end $$;
+reset role;
+
 -- Person 1 starts an own plan for a clash (prj02-R1 US-6).
 insert into app_prj02.reminders (family_id, trip_id, person_id, kind, send_at, payload)
   values (current_setting('test.family')::uuid, current_setting('test.trip')::uuid, current_setting('test.p1')::uuid,
@@ -194,6 +203,10 @@ begin
   if n <> 0 then raise exception 'family settings left'; end if;
   select count(*) into n from app_prj02.travel_modes where family_id = v_family;
   if n <> 0 then raise exception 'travel modes of the family left'; end if;
+  select count(*) into n from app_prj02.children where family_id = v_family;
+  if n <> 0 then raise exception 'children of the family left'; end if;
+  select count(*) into n from app_prj02.calendar_conventions where family_id = v_family;
+  if n <> 0 then raise exception 'calendar convention of the family left'; end if;
   -- core: rows kept, link removed.
   select count(*) into n from core.cost_ledger where tenant_id = v_family;
   if n <> 0 then raise exception 'cost rows still linked'; end if;
@@ -211,7 +224,8 @@ begin
      or coalesce((d ->> 'core.agent_runs')::int, -1) <> 3 or coalesce((d ->> 'app_prj02.calendar_changes')::int, -1) <> 2
      or coalesce((d ->> 'app_prj02.calendars')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.trips')::int, -1) <> 1
      or coalesce((d ->> 'app_prj02.places')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.family_settings')::int, -1) <> 1
-     or coalesce((d ->> 'app_prj02.travel_modes')::int, -1) <> 3 then
+     or coalesce((d ->> 'app_prj02.travel_modes')::int, -1) <> 3
+     or coalesce((d ->> 'app_prj02.children')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.calendar_conventions')::int, -1) <> 1 then
     raise exception 'second forget log counts wrong: %', d;
   end if;
   if d::text like '%' || v_p2::text || '%' or d::text like '%7000000%' then

@@ -610,6 +610,77 @@ begin
   if n <> 1 then raise exception 'stay trip pick-up reminder missing'; end if;
 end $$;
 
+-- Children and calendar conventions (prj02-R1 US-7): only the family's own.
+set local role app_prj02_bot;
+do $$
+declare r jsonb; n int; blocked boolean; v_cel uuid;
+begin
+  perform app_prj02.begin_request('telegram', '7123456789');            -- A's admin
+  r := app_prj02.child_save('  Celine ', array['Cel', ' cel ', '', 'Ce-Ce', '小雪']);
+  if (r ->> 'ok')::boolean is not true then raise exception 'A could not add a child: %', r; end if;
+  v_cel := (r ->> 'child')::uuid;
+  perform set_config('test.child_a', v_cel::text, true);
+  r := app_prj02.child_save('celine', array['Cel', 'Celly']);              -- same child, other case: updated
+  select count(*) into n from app_prj02.children;
+  if n <> 1 then raise exception 'A sees % children, expected 1 (same name, other case = same child)', n; end if;
+  select count(*) into n from app_prj02.calendar_conventions;
+  if n <> 1 then raise exception 'A sees % conventions, expected its default', n; end if;
+  r := app_prj02.child_save('Too many', array['a','b','c','d','e','f','g','h','i','j','k']);
+  if r ->> 'reason' is distinct from 'too_many' then raise exception 'more than 10 aliases accepted: %', r; end if;
+  blocked := false;
+  begin insert into app_prj02.children (family_id, name) values (current_setting('test.family_a')::uuid, 'X');
+  exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'the bot wrote children directly'; end if;
+  -- B sees none of A's children and cannot remove them.
+  perform app_prj02.begin_request('telegram', '6200000001');
+  select count(*) into n from app_prj02.children;
+  if n <> 0 then raise exception 'B sees A''s children'; end if;
+  r := app_prj02.child_remove('Celine');
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'B removed A''s child: %', r; end if;
+  select count(*) into n from app_prj02.calendar_conventions where family_id = current_setting('test.family_a')::uuid;
+  if n <> 0 then raise exception 'B sees A''s convention'; end if;
+end $$;
+reset role;
+-- A trip of A with an unknown name, written by the job.
+set local role app_prj02_job;
+do $$
+declare t uuid; n int;
+begin
+  perform app_prj02.begin_job(current_setting('test.family_a')::uuid);
+  select count(*) into n from app_prj02.children;
+  if n <> 1 then raise exception 'job A does not see its children'; end if;
+  t := app_prj02.job_upsert_trip('evt-who', '2026-11-29T10:00:00+08', '2026-11-29T11:00:00+08', 'Art - Cece', '239809',
+         18, 'onemap', '2026-11-29T09:32:00+08', '2026-11-29T10:37:00+08', '2026-11-29T09:32:00+08', '2026-11-29T10:37:00+08',
+         true, true, '{}', 'unknown', 'Cece');
+  perform set_config('test.trip_who', t::text, true);
+  perform app_prj02.begin_job(current_setting('test.family_b')::uuid);
+  select count(*) into n from app_prj02.children;
+  if n <> 0 then raise exception 'job B sees A''s children'; end if;
+end $$;
+reset role;
+set local role app_prj02_bot;
+do $$
+declare r jsonb;
+begin
+  -- B cannot answer for A's trip, nor tie the name to A's child.
+  perform app_prj02.begin_request('telegram', '6200000001');
+  r := app_prj02.resolve_unknown(current_setting('test.trip_who')::uuid, current_setting('test.child_a')::uuid);
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'B answered A''s question: %', r; end if;
+  -- A's other adult says Cece is Celine.
+  perform app_prj02.begin_request('telegram', '5550001111');
+  r := app_prj02.resolve_unknown(current_setting('test.trip_who')::uuid, current_setting('test.child_a')::uuid);
+  if (r ->> 'as_child')::boolean is not true then raise exception 'name not added as an alias: %', r; end if;
+  r := app_prj02.resolve_unknown(current_setting('test.trip_who')::uuid, null);
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'a question was answered twice: %', r; end if;
+end $$;
+reset role;
+do $$
+declare n int;
+begin
+  select count(*) into n from app_prj02.children where id = current_setting('test.child_a')::uuid and 'Cece' = any (aliases) and 'Celly' = any (aliases);
+  if n <> 1 then raise exception 'alias Cece not added to Celine'; end if;
+end $$;
+
 -- anon and authenticated reach nothing in app_prj02.
 do $$
 declare blocked boolean; who text;
