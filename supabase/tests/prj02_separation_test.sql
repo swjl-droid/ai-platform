@@ -734,6 +734,73 @@ begin
   if n <> 1 then raise exception 'chained leave time or note not kept'; end if;
 end $$;
 
+-- Ways of doing a trip (prj02-R1 US-9): a leg's own way, a wait there, a choice taken once.
+set local role app_prj02_job;
+do $$
+declare t uuid;
+begin
+  perform app_prj02.begin_job(current_setting('test.family_a')::uuid);
+  t := app_prj02.job_upsert_trip('evt-ways', '2026-11-28T09:30:00+08', '2026-11-28T11:30:00+08', 'AF - Ang', '258130',
+         16, 'onemap', '2026-11-28T09:04:00+08', '2026-11-28T11:09:00+08', '2026-11-28T09:04:00+08', '2026-11-28T11:09:00+08');
+  perform set_config('test.trip_ways', t::text, true);
+  perform app_prj02.job_queue(t, 'plan', current_setting('test.person_a')::uuid, now(), jsonb_build_object('trips', jsonb_build_array(t)));
+end $$;
+reset role;
+do $$
+declare v uuid;
+begin
+  update app_prj02.reminders set status = 'sent', sent_at = now() - interval '1 minute'
+   where trip_id = current_setting('test.trip_ways')::uuid and kind = 'plan' returning id into v;
+  perform set_config('test.msg_ways', v::text, true);
+end $$;
+set local role app_prj02_bot;
+do $$
+declare r jsonb; t uuid := current_setting('test.trip_ways')::uuid; m uuid := current_setting('test.msg_ways')::uuid;
+begin
+  -- B sees nothing of A's message and cannot answer it.
+  perform app_prj02.begin_request('telegram', '6200000001');
+  if app_prj02.clash_options(m) is not null then raise exception 'B read the options of A''s message'; end if;
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'message', m, 'mode', 'taxi')));
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'B answered A''s message: %', r; end if;
+  if (app_prj02.plan_await(m, 30) ->> 'ok')::boolean then raise exception 'B started an own plan on A''s message'; end if;
+end $$;
+do $$
+declare r jsonb; t uuid := current_setting('test.trip_ways')::uuid; m uuid := current_setting('test.msg_ways')::uuid;
+begin
+  perform app_prj02.begin_request('telegram', '7123456789');
+  r := app_prj02.clash_options(m);
+  if r ->> 'kind' is distinct from 'plan' or r ->> 'sent_at' is null then raise exception 'plan message options not readable: %', r; end if;
+  -- A wait there with two adults, or an unknown way for a leg: refused, nothing changed.
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'message', m, 'mode', 'adult', 'person', current_setting('test.person_a'),
+         'wait', true, 'pick_person', current_setting('test.other_a'))));
+  if r ->> 'reason' is distinct from 'bad_choice' then raise exception 'a wait with two adults was accepted: %', r; end if;
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'message', m, 'mode', 'adult', 'person', current_setting('test.person_a'),
+         'pick_mode', 'helicopter')));
+  if r ->> 'reason' is distinct from 'bad_choice' then raise exception 'an unknown way for a leg was accepted: %', r; end if;
+  -- Car there, taxi back: taken; the same tap again (or another adult's copy): already chosen.
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'message', m, 'mode', 'adult', 'person', current_setting('test.person_a'),
+         'pick_mode', 'taxi', 'pick_leave', '2026-11-28T10:55:00+08', 'pick_send', '2026-11-28T10:55:00+08')));
+  if (r ->> 'ok')::boolean is not true then raise exception 'car there, taxi back refused: %', r; end if;
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'message', m, 'mode', 'adult', 'person', current_setting('test.person_a'),
+         'wait', true)));
+  if r ->> 'reason' is distinct from 'already' or r ->> 'by' is distinct from current_setting('test.person_a') then
+    raise exception 'a second tap on the same message changed the trip: %', r;
+  end if;
+  -- "My own plan…" under a 'who takes it?' message.
+  if (app_prj02.plan_await(m, 30) ->> 'ok')::boolean is not true then raise exception 'own plan under a who-takes-it message refused'; end if;
+end $$;
+reset role;
+do $$
+declare n int;
+begin
+  select count(*) into n from app_prj02.trips where id = current_setting('test.trip_ways')::uuid
+     and pick_mode = 'taxi' and wait_there = false and pick_leave_set = '2026-11-28T10:55:00+08';
+  if n <> 1 then raise exception 'the leg''s way was not kept, or the second tap changed it'; end if;
+  select count(*) into n from app_prj02.reminders where trip_id = current_setting('test.trip_ways')::uuid and status = 'due'
+     and kind = 'pick' and person_id = current_setting('test.person_a')::uuid and send_at = '2026-11-28T10:55:00+08';
+  if n <> 1 then raise exception 'no taxi booking reminder for the adult who chose it'; end if;
+end $$;
+
 -- anon and authenticated reach nothing in app_prj02.
 do $$
 declare blocked boolean; who text;

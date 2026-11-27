@@ -21,6 +21,7 @@ mutations=(
   's/for select to app_prj02_bot using (app_prj02\.is_member(family_id));$/for select to app_prj02_bot using (true);/|a prj02 policy (any table) that lets the bot read every family'
   's/^  select \* into t from app_prj02\.trips where id = p_trip and family_id = r\.family_id and who_state = .unknown.;/  select * into t from app_prj02.trips where id = p_trip and who_state = \x27unknown\x27;/|a prj02 resolve_unknown() that answers for another family'
   's/^    if v is not null and not exists (select 1 from app_prj02\.people where id = v and family_id = p_family and role = .adult.) then/    if false then/|a prj02 legs_ok() that accepts an adult of another family'
+  's/^      if t\.status = .assigned. and v_sent is not null and t\.assigned_at >= v_sent then/      if false then/|a prj02 assign_trips() that takes a second tap on the same message'
 )
 fail=0
 for m in "${mutations[@]}"; do
