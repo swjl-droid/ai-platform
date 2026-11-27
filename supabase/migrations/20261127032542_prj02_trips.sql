@@ -1,6 +1,6 @@
 -- ai-platform: trips, reminders and the scheduler of prj02 (Family orchestrator), story prj02-R1
 -- US-3 (reminders and clashes).
--- PROVISIONAL VERSION: renamed to the version Supabase records once applied (CLAUDE.md rule 3).
+-- Applied 27/11/2026 after John's "yes, apply"; file named from the recorded version (CLAUDE.md rule 3).
 --
 -- Decisions (27/11/2026): US-3 release-1 slice, option B (evening 'who takes it?' taps, one-car
 -- clash options computed in code, reminders at leave time, quiet hours, OneMap or an estimate);
