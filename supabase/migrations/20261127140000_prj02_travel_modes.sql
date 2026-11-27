@@ -11,7 +11,8 @@
 -- Changes:
 --   app_prj02.travel_modes (new; family_id; no personal data; deleted with the family)
 --   app_prj02.places: one saved time per place and route (column route; unique per family, place, route)
---   app_prj02.family_settings: default_drive_min removed (replaced by the 'car' row)
+--   app_prj02.family_settings: default_drive_min no longer used (the 'car' row); dropped later, once
+--     the new bot code is live, so the running scheduler never breaks
 --   set_family_settings(): also gives a new family the three starting rows (kept if they exist)
 --   set_travel_mode(): owner only, changes one row
 --   job_save_place(): takes the route (default 'drive')
@@ -43,7 +44,10 @@ select s.family_id, v.mode, v.route, v.estimate_min, v.lead_min
        as v (mode, route, estimate_min, lead_min)
 on conflict do nothing;
 
-alter table app_prj02.family_settings drop column default_drive_min;
+-- default_drive_min is replaced by the 'car' row. It stays until the bot code that reads travel_modes
+-- is live (the running code still reads it between this migration and that merge); a later migration
+-- drops it.
+comment on column app_prj02.family_settings.default_drive_min is 'not used since prj02-R1 US-3 travel modes (Hub row 277): the car row of app_prj02.travel_modes; dropped in a later migration';
 
 -- Saved places: one time per route (a drive and a public-transport time for the same pool).
 alter table app_prj02.places add column route text not null default 'drive' check (route in ('drive', 'pt', 'walk', 'cycle'));
