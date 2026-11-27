@@ -1,6 +1,6 @@
 -- ai-platform: Family calendar link and calendar change log of prj02 (Family orchestrator), story
 -- prj02-R1 US-2 (calendar changes by chat).
--- PROVISIONAL VERSION: renamed to the version Supabase records once applied (CLAUDE.md rule 3).
+-- Applied 27/11/2026 after John's "yes, apply"; file named from the recorded version (CLAUDE.md rule 3).
 --
 -- Decisions: the bot reaches each family's shared calendar through a Google service account the
 -- family shares its calendar with (27/11/2026, Hub decision 'Bot reaches the Family calendar
