@@ -18,6 +18,8 @@ mutations=(
   's/^  if (st ->> .paused.)::boolean then return; end if;/  -- planted: pause ignored/|a prj02 job_claim_due() that sends while the family is paused'
   's/^   where id = p_trip and family_id = r\.family_id and hold_state = .held.;/   where id = p_trip and hold_state = \x27held\x27;/|a prj02 release_trip() that releases a trip of another family'
   's/^  if p\.person_id is distinct from r\.person_id then return jsonb_build_object(.ok., false, .reason., .not_yours.); end if;/  -- planted: anyone may apply/|a prj02 plan_decide() that lets another adult apply the plan'
+  's/for select to app_prj02_bot using (app_prj02\.is_member(family_id));$/for select to app_prj02_bot using (true);/|a prj02 policy (any table) that lets the bot read every family'
+  's/^  select \* into t from app_prj02\.trips where id = p_trip and family_id = r\.family_id and who_state = .unknown.;/  select * into t from app_prj02.trips where id = p_trip and who_state = \x27unknown\x27;/|a prj02 resolve_unknown() that answers for another family'
 )
 fail=0
 for m in "${mutations[@]}"; do
