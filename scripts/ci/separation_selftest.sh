@@ -13,6 +13,7 @@ mutations=(
   's/^  delete from app_prj02\.people where id = p_person;/  -- planted: person kept/|a prj02 forget() that keeps the person'
   's/^    delete from app_prj02\.request_ctx where xact = v_xact;/    -- planted: previous context kept/|a prj02 begin_request() that keeps the previous context for an unknown account'
   's/^  if c\.person_id is distinct from r\.person_id then return/  if false then return/|a prj02 decide_change() that lets another adult say yes'
+  's/^     where id = (c ->> .trip.)::uuid and family_id = r\.family_id for update;/     where id = (c ->> \x27trip\x27)::uuid for update;/|a prj02 assign_trips() that assigns a trip of another family'
 )
 fail=0
 for m in "${mutations[@]}"; do
