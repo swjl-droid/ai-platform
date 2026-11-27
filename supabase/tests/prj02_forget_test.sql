@@ -43,6 +43,30 @@ begin
 end $$;
 reset role;
 
+-- Person 1 takes a trip (assigned by person 2) and has reminders queued; the family has settings
+-- and a saved place.
+select app_prj02.set_family_settings(current_setting('test.family')::uuid, '520123', 1);
+set local role app_prj02_job;
+do $$
+declare t uuid;
+begin
+  perform app_prj02.begin_job(current_setting('test.family')::uuid);
+  perform app_prj02.job_save_place('jurong west pool', 1.34, 103.69, 18, 'onemap');
+  t := app_prj02.job_upsert_trip('evt-9', now() + interval '1 day', now() + interval '25 hours', 'Swim for Forget Me', 'Jurong West pool',
+         18, 'onemap', now() + interval '23 hours', now() + interval '24 hours', now() + interval '23 hours', now() + interval '24 hours');
+  perform set_config('test.trip', t::text, true);
+  perform app_prj02.job_queue(t, 'plan', current_setting('test.p1')::uuid, now(), '{}');
+end $$;
+reset role;
+set local role app_prj02_bot;
+do $$
+begin
+  perform app_prj02.begin_request('telegram', '7000000002');
+  perform app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', current_setting('test.trip')::uuid,
+    'mode', 'adult', 'person', current_setting('test.p1')::uuid)));
+end $$;
+reset role;
+
 -- Data in core naming the family and person 1.
 insert into core.cost_ledger (app, tenant_id, provider, model, purpose)
   values ('prj02', current_setting('test.family')::uuid, 'anthropic', 'test-model', 'ci-test');
@@ -92,7 +116,8 @@ begin
   if coalesce((d ->> 'app_prj02.people')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.contacts')::int, -1) <> 1
      or coalesce((d ->> 'app_prj02.consents')::int, -1) <> 2 or coalesce((d ->> 'app_prj02.families')::int, -1) <> 0
      or coalesce((d ->> 'app_prj02.invites_unlinked')::int, -1) <> 3
-     or coalesce((d ->> 'app_prj02.calendar_changes_unlinked')::int, -1) <> 2 or coalesce((d ->> 'core.agent_runs_unlinked')::int, -1) <> 1 then
+     or coalesce((d ->> 'app_prj02.calendar_changes_unlinked')::int, -1) <> 2 or coalesce((d ->> 'core.agent_runs_unlinked')::int, -1) <> 1
+     or coalesce((d ->> 'app_prj02.trips_unlinked')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.reminders')::int, -1) <> 3 then
     raise exception 'first forget log counts wrong: %', d;
   end if;
   -- Calendar changes stay in the family's log without the person; the waiting run lost its link.
@@ -100,6 +125,12 @@ begin
   if n <> 2 then raise exception 'calendar changes lost or still linked to person 1 (% unlinked)', n; end if;
   select count(*) into n from core.agent_runs where app = 'prj02' and waiting_for::text like '%' || v_p1::text || '%';
   if n <> 0 then raise exception 'an agent run still waits for person 1'; end if;
+  select count(*) into n from app_prj02.trips where owner_person_id = v_p1 or assigned_by = v_p1;
+  if n <> 0 then raise exception 'a trip still names person 1'; end if;
+  select count(*) into n from app_prj02.trips where family_id = v_family and status = 'assigned' and owner_person_id is null;
+  if n <> 1 then raise exception 'the family lost its trip, or it still has an owner'; end if;
+  select count(*) into n from app_prj02.reminders where person_id = v_p1;
+  if n <> 0 then raise exception 'reminders for person 1 left'; end if;
 end $$;
 
 -- The owner forgets person 2 (a request received another way): the family goes too.
@@ -122,6 +153,12 @@ begin
   if n <> 0 then raise exception 'calendar changes of the family left'; end if;
   select count(*) into n from app_prj02.calendars where family_id = v_family;
   if n <> 0 then raise exception 'calendar link of the family left'; end if;
+  select count(*) into n from app_prj02.trips where family_id = v_family;
+  if n <> 0 then raise exception 'trips of the family left'; end if;
+  select count(*) into n from app_prj02.places where family_id = v_family;
+  if n <> 0 then raise exception 'saved places of the family left'; end if;
+  select count(*) into n from app_prj02.family_settings where family_id = v_family;
+  if n <> 0 then raise exception 'family settings left'; end if;
   -- core: rows kept, link removed.
   select count(*) into n from core.cost_ledger where tenant_id = v_family;
   if n <> 0 then raise exception 'cost rows still linked'; end if;
@@ -137,7 +174,8 @@ begin
   if coalesce((d ->> 'app_prj02.people')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.families')::int, -1) <> 1
      or coalesce((d ->> 'app_prj02.invites')::int, -1) <> 3 or coalesce((d ->> 'core.cost_ledger')::int, -1) <> 1
      or coalesce((d ->> 'core.agent_runs')::int, -1) <> 3 or coalesce((d ->> 'app_prj02.calendar_changes')::int, -1) <> 2
-     or coalesce((d ->> 'app_prj02.calendars')::int, -1) <> 1 then
+     or coalesce((d ->> 'app_prj02.calendars')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.trips')::int, -1) <> 1
+     or coalesce((d ->> 'app_prj02.places')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.family_settings')::int, -1) <> 1 then
     raise exception 'second forget log counts wrong: %', d;
   end if;
   if d::text like '%' || v_p2::text || '%' or d::text like '%7000000%' then

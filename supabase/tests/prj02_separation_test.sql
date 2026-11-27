@@ -264,6 +264,124 @@ begin
   if n <> 3 then raise exception 'agent runs do not follow the changes (% of 3)', n; end if;
 end $$;
 
+-- Trips and reminders (prj02-R1 US-3): the scheduler's role works for one family per job and sees
+-- nothing else; the chat bot cannot open a job; an adult's tap assigns only their family's trips.
+select app_prj02.set_family_settings(current_setting('test.family_a')::uuid, '640123', 1);
+select app_prj02.set_driver(current_setting('test.person_a')::uuid, true);
+set local role app_prj02_job;
+do $$
+declare
+  v_a uuid := current_setting('test.family_a')::uuid;
+  v_b uuid := current_setting('test.family_b')::uuid;
+  t uuid; n int; blocked boolean; r record;
+begin
+  select count(*) into n from app_prj02.job_families();
+  if n <> 2 then raise exception 'job_families lists % families, expected the 2 with a calendar', n; end if;
+  -- A job for an unknown family opens nothing and clears any earlier context of the transaction.
+  if app_prj02.begin_job(gen_random_uuid()) then raise exception 'a job opened for an unknown family'; end if;
+  select count(*) into n from app_prj02.people;
+  if n <> 0 then raise exception 'the job role sees % people without a job', n; end if;
+  if not app_prj02.begin_job(v_a) then raise exception 'job for A not opened'; end if;
+  select count(*) into n from app_prj02.people;
+  if n <> 2 then raise exception 'job A sees % people, expected 2', n; end if;
+  select count(*) into n from app_prj02.contacts where family_id = v_b;
+  if n <> 0 then raise exception 'job A sees family B''s contacts'; end if;
+  t := app_prj02.job_upsert_trip('evt-swim', '2026-11-28T15:00:00+08', '2026-11-28T16:00:00+08', 'Ethan swim 🏊', ' Jurong West ',
+         18, 'onemap', '2026-11-28T14:32:00+08', '2026-11-28T15:37:00+08', '2026-11-28T14:32:00+08', '2026-11-28T15:37:00+08');
+  perform set_config('test.trip_a', t::text, true);
+  -- The same event again updates the same trip.
+  if app_prj02.job_upsert_trip('evt-swim', '2026-11-28T15:00:00+08', '2026-11-28T16:30:00+08', 'Ethan swim 🏊', null,
+       18, 'onemap', '2026-11-28T14:32:00+08', '2026-11-28T16:07:00+08', '2026-11-28T14:32:00+08', '2026-11-28T16:07:00+08') <> t then
+    raise exception 'the same event made a second trip';
+  end if;
+  if not app_prj02.job_queue(t, 'plan', current_setting('test.person_a')::uuid, now() - interval '1 minute', '{}') then
+    raise exception 'plan message not queued';
+  end if;
+  if app_prj02.job_queue(t, 'plan', current_setting('test.person_a')::uuid, now(), '{}') then
+    raise exception 'the same plan message was queued twice';
+  end if;
+  blocked := false;
+  begin perform app_prj02.job_queue(t, 'drop', current_setting('test.person_a')::uuid, now(), '{}');
+  exception when others then blocked := true; end;
+  if not blocked then raise exception 'the job queued a reminder without an adult''s tap'; end if;
+  select count(*) into n from app_prj02.job_claim_due(10);
+  if n <> 1 then raise exception 'job A claimed % messages, expected 1', n; end if;
+  select count(*) into n from app_prj02.job_claim_due(10);
+  if n <> 0 then raise exception 'a message was claimed twice'; end if;
+  -- Job for B: nothing of A, and cannot attach messages to A's trip.
+  perform app_prj02.begin_job(v_b);
+  select count(*) into n from app_prj02.trips where family_id = v_a;
+  if n <> 0 then raise exception 'job B sees A''s trips'; end if;
+  select count(*) into n from app_prj02.people;
+  if n <> 1 then raise exception 'job B sees % people, expected 1', n; end if;
+  blocked := false;
+  begin perform app_prj02.job_queue(t, 'clash', (select id from app_prj02.people limit 1), now(), '{}');
+  exception when foreign_key_violation then blocked := true; end;
+  if not blocked then raise exception 'job B queued a message on A''s trip'; end if;
+  select count(*) into n from app_prj02.job_claim_due(10);
+  if n <> 0 then raise exception 'job B claimed A''s messages'; end if;
+  -- The job role cannot act as a person or write tables directly.
+  blocked := false;
+  begin perform app_prj02.begin_request('telegram', '7123456789');
+  exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'the job role opened a person''s request'; end if;
+  blocked := false;
+  begin perform app_prj02.assign_trips('[]');
+  exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'the job role could assign trips'; end if;
+  blocked := false;
+  begin delete from app_prj02.trips;
+  exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'the job role deleted trips directly'; end if;
+  -- An unknown family opens nothing.
+  if app_prj02.begin_job(gen_random_uuid()) then raise exception 'a job opened for an unknown family'; end if;
+  select count(*) into n from app_prj02.people;
+  if n <> 0 then raise exception 'a failed job kept the previous family''s context'; end if;
+end $$;
+reset role;
+
+set local role app_prj02_bot;
+do $$
+declare
+  t uuid := current_setting('test.trip_a')::uuid;
+  v_admin_a uuid := current_setting('test.person_a')::uuid;
+  r jsonb; n int; blocked boolean;
+begin
+  -- The chat bot cannot open a job.
+  blocked := false;
+  begin perform app_prj02.begin_job(current_setting('test.family_a')::uuid);
+  exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'the chat bot opened a job'; end if;
+  -- B cannot see or assign A's trip, nor assign it to A's adult.
+  perform app_prj02.begin_request('telegram', '6200000001');
+  select count(*) into n from app_prj02.trips where id = t;
+  if n <> 0 then raise exception 'B sees A''s trip'; end if;
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'mode', 'taxi')));
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'B assigned A''s trip: %', r; end if;
+  -- A's other adult assigns the trip to A's admin: reminders queued for the admin.
+  perform app_prj02.begin_request('telegram', '5550001111');
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'mode', 'adult', 'person', v_admin_a)));
+  if (r ->> 'ok')::boolean is not true then raise exception 'A''s adult could not assign: %', r; end if;
+  select count(*) into n from app_prj02.trips where id = t and status = 'assigned' and owner_person_id = v_admin_a;
+  if n <> 1 then raise exception 'trip not assigned to A''s admin'; end if;
+  -- Nobody of another family can be named as owner.
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'mode', 'adult',
+         'person', (select person_id from app_prj02.consents limit 0))));
+  if r ->> 'reason' is distinct from 'bad_choice' then raise exception 'an empty owner was accepted: %', r; end if;
+  -- The bot reads no reminders or places (the outbox is the scheduler's).
+  select count(*) into n from app_prj02.reminders;
+  if n <> 0 then raise exception 'the chat bot reads the outbox'; end if;
+end $$;
+reset role;
+do $$
+declare n int;
+begin
+  select count(*) into n from app_prj02.reminders
+   where trip_id = current_setting('test.trip_a')::uuid and kind in ('drop', 'pick') and status = 'due'
+     and person_id = current_setting('test.person_a')::uuid;
+  if n <> 2 then raise exception 'assignment queued % reminders for the owner, expected 2', n; end if;
+end $$;
+
 -- anon and authenticated reach nothing in app_prj02.
 do $$
 declare blocked boolean; who text;
