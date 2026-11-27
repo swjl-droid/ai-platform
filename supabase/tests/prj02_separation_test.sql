@@ -408,6 +408,106 @@ begin
   if n <> 1 then raise exception 'a tap did not ask for a new scan of the family'; end if;
 end $$;
 
+-- Limits (prj02-R1 US-4): pause, budget and held trips stay inside the family.
+set local role app_prj02_bot;
+do $$
+declare t uuid := current_setting('test.trip_a')::uuid; r jsonb; blocked boolean;
+begin
+  -- B pauses its own family and cannot release A's trip.
+  perform app_prj02.begin_request('telegram', '6200000001');
+  r := app_prj02.set_pause(true);
+  if (r ->> 'ok')::boolean is not true then raise exception 'B could not pause its family: %', r; end if;
+  -- A: budget of A only, not paused by B.
+  perform app_prj02.begin_request('telegram', '5550001111');
+  r := app_prj02.budget();
+  if (r ->> 'paused')::boolean is not false then raise exception 'B''s pause reached family A: %', r; end if;
+  if (r ->> 'week_max_usd')::numeric is distinct from 5.00 then raise exception 'weekly budget not 5.00: %', r; end if;
+  if (r ->> 'week_cost_usd')::numeric is distinct from 0 then raise exception 'A''s budget counts other costs: %', r; end if;
+  -- A pauses (resumed below, after the job checks).
+  perform app_prj02.set_pause(true);
+  -- The chat bot cannot hold trips or read the job status.
+  blocked := false;
+  begin perform app_prj02.job_hold_trip(t);
+  exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'the chat bot held a trip'; end if;
+  -- An unknown account gets no budget.
+  perform app_prj02.begin_request('telegram', '9999999999');
+  blocked := false;
+  begin perform app_prj02.budget();
+  exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'an unknown account read a budget'; end if;
+end $$;
+reset role;
+-- A's costs in core count for A only (B's cost row does not).
+insert into core.cost_ledger (app, tenant_id, provider, model, purpose, cost_usd)
+  values ('prj02', current_setting('test.family_b')::uuid, 'anthropic', 'claude-haiku-5-5', 'ci-test', 4.99);
+-- A message already due for A (test setup as owner): it must wait while A is paused.
+insert into app_prj02.reminders (family_id, trip_id, person_id, kind, send_at)
+  values (current_setting('test.family_a')::uuid, current_setting('test.trip_a')::uuid,
+          current_setting('test.person_a')::uuid, 'warning', now() - interval '1 minute');
+set local role app_prj02_job;
+do $$
+declare v_a uuid := current_setting('test.family_a')::uuid; t uuid := current_setting('test.trip_a')::uuid; n int; st jsonb;
+begin
+  perform app_prj02.begin_job(v_a);
+  -- Paused: nothing queued, nothing claimed.
+  if app_prj02.job_queue(t, 'warning', current_setting('test.person_a')::uuid, now() - interval '1 minute', '{}') then
+    raise exception 'a warning was queued while paused';
+  end if;
+  select count(*) into n from app_prj02.job_claim_due(10);
+  if n <> 0 then raise exception 'a paused family got % messages', n; end if;
+  st := app_prj02.job_status();
+  if (st ->> 'paused')::boolean is not true then raise exception 'job status does not show the pause: %', st; end if;
+  -- Held once; a second hold changes nothing.
+  if not app_prj02.job_hold_trip(t) then raise exception 'trip not held'; end if;
+  if app_prj02.job_hold_trip(t) then raise exception 'trip held twice'; end if;
+  -- Job B cannot hold A's trip.
+  perform app_prj02.begin_job(current_setting('test.family_b')::uuid);
+  if app_prj02.job_hold_trip(t) then raise exception 'job B held A''s trip'; end if;
+end $$;
+reset role;
+set local role app_prj02_bot;
+do $$
+declare r jsonb;
+begin
+  -- B cannot release A's held trip.
+  perform app_prj02.begin_request('telegram', '6200000001');
+  r := app_prj02.release_trip(current_setting('test.trip_a')::uuid);
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'B released A''s held trip: %', r; end if;
+  perform app_prj02.begin_request('telegram', '5550001111');
+  r := app_prj02.release_trip(current_setting('test.trip_a')::uuid);
+  if (r ->> 'ok')::boolean is not true then raise exception 'A could not release its trip: %', r; end if;
+  perform app_prj02.set_pause(false);
+  if (app_prj02.budget() ->> 'paused')::boolean is not false then raise exception 'resume did not work'; end if;
+end $$;
+reset role;
+-- The day's allowance: with max 1 message a day and 1 already sent today, nothing more is claimed.
+update app_prj02.family_settings set max_messages_day = 1 where family_id = current_setting('test.family_a')::uuid;
+insert into app_prj02.reminders (family_id, trip_id, person_id, kind, send_at)
+  select current_setting('test.family_a')::uuid, current_setting('test.trip_a')::uuid, p.id, 'warning', now() - interval '1 minute'
+    from app_prj02.people p
+   where p.family_id = current_setting('test.family_a')::uuid and p.id <> current_setting('test.person_a')::uuid;
+set local role app_prj02_job;
+do $$
+declare v_a uuid := current_setting('test.family_a')::uuid; t uuid := current_setting('test.trip_a')::uuid; n int; st jsonb;
+begin
+  perform app_prj02.begin_job(v_a);
+  st := app_prj02.job_status();
+  if (st ->> 'sent_today')::int < 1 then raise exception 'sent today not counted: %', st; end if;
+  select count(*) into n from app_prj02.job_claim_due(10);
+  if n <> 0 then raise exception 'the daily allowance was exceeded (% claimed)', n; end if;
+end $$;
+reset role;
+do $$
+declare n int;
+begin
+  select count(*) into n from app_prj02.trips where id = current_setting('test.trip_a')::uuid and hold_state = 'released';
+  if n <> 1 then raise exception 'released trip not kept released'; end if;
+  select count(*) into n from app_prj02.family_settings
+   where family_id = current_setting('test.family_b')::uuid and paused_at is not null;
+  if n <> 1 then raise exception 'B''s own pause was not kept'; end if;
+end $$;
+
 -- anon and authenticated reach nothing in app_prj02.
 do $$
 declare blocked boolean; who text;
