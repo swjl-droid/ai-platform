@@ -681,6 +681,59 @@ begin
   if n <> 1 then raise exception 'alias Cece not added to Celine'; end if;
 end $$;
 
+-- Chained trips and per-leg adults (prj02-R1 US-8): only adults of the family, times near the activity.
+set local role app_prj02_job;
+do $$
+declare t uuid;
+begin
+  perform app_prj02.begin_job(current_setting('test.family_a')::uuid);
+  t := app_prj02.job_upsert_trip('evt-chain', '2026-11-28T15:30:00+08', '2026-11-28T17:30:00+08', 'Ballet', '248371',
+         9, 'onemap', '2026-11-28T15:11:00+08', '2026-11-28T17:16:00+08', '2026-11-28T15:11:00+08', '2026-11-28T17:16:00+08');
+  perform set_config('test.trip_chain', t::text, true);
+end $$;
+reset role;
+do $$
+declare v uuid;
+begin
+  select id into v from app_prj02.people where family_id = current_setting('test.family_a')::uuid
+     and id <> current_setting('test.person_a')::uuid and role = 'adult' limit 1;
+  perform set_config('test.other_a', v::text, true);
+end $$;
+set local role app_prj02_bot;
+do $$
+declare r jsonb; t uuid := current_setting('test.trip_chain')::uuid;
+begin
+  perform app_prj02.begin_request('telegram', '7123456789');
+  -- An adult of family B as the pick-up adult: refused.
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'mode', 'adult', 'person', current_setting('test.person_a'),
+         'pick_person', current_setting('test.person_b'))));
+  if r ->> 'reason' is distinct from 'bad_choice' then raise exception 'a pick-up adult of another family was accepted: %', r; end if;
+  -- A leave time after the start, or 5 hours before it: refused.
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'mode', 'adult', 'person', current_setting('test.person_a'),
+         'drop_leave', '2026-11-28T15:40:00+08')));
+  if r ->> 'reason' is distinct from 'bad_choice' then raise exception 'a drop-off leave time after the start was accepted: %', r; end if;
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'mode', 'adult', 'person', current_setting('test.person_a'),
+         'drop_leave', '2026-11-28T10:00:00+08')));
+  if r ->> 'reason' is distinct from 'bad_choice' then raise exception 'a drop-off leave time 5 h early was accepted: %', r; end if;
+  -- The admin drops off (leaving 14:45, chained), the other adult picks up: reminders per leg.
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'mode', 'adult', 'person', current_setting('test.person_a'),
+         'drop_leave', '2026-11-28T14:45:00+08', 'drop_send', '2026-11-28T14:45:00+08', 'drop_note', 'then Acro @ Dunearn',
+         'pick_person', current_setting('test.other_a'))));
+  if (r ->> 'ok')::boolean is not true then raise exception 'chained choice refused: %', r; end if;
+end $$;
+reset role;
+do $$
+declare n int;
+begin
+  select count(*) into n from app_prj02.reminders where trip_id = current_setting('test.trip_chain')::uuid and status = 'due'
+     and ((kind = 'drop' and person_id = current_setting('test.person_a')::uuid and send_at = '2026-11-28T14:45:00+08')
+       or (kind = 'pick' and person_id = current_setting('test.other_a')::uuid));
+  if n <> 2 then raise exception 'reminders not per leg and adult (% of 2)', n; end if;
+  select count(*) into n from app_prj02.trips where id = current_setting('test.trip_chain')::uuid
+     and drop_leave_set = '2026-11-28T14:45:00+08' and drop_note = 'then Acro @ Dunearn';
+  if n <> 1 then raise exception 'chained leave time or note not kept'; end if;
+end $$;
+
 -- anon and authenticated reach nothing in app_prj02.
 do $$
 declare blocked boolean; who text;
