@@ -33,18 +33,18 @@ do $$
 declare r jsonb; n int; v_code text := current_setting('test.code_a');
 begin
   r := app_prj02.preview_invite('  ' || upper(left(v_code, 16)) || ' ' || upper(substr(v_code, 17)) || E'\n');
-  if not (r ->> 'ok')::boolean or r ->> 'family_name' <> 'Tan family' then
+  if (r ->> 'ok')::boolean is not true or r ->> 'family_name' is distinct from 'Tan family' then
     raise exception 'noisy code not recognised: %', r;
   end if;
   r := app_prj02.accept_invite(upper(v_code), 'telegram', ' 7123456789 ', E'  Wei Ling \U0001F338\t ', 'v1');
-  if not (r ->> 'ok')::boolean then raise exception 'family A admin could not join: %', r; end if;
+  if (r ->> 'ok')::boolean is not true then raise exception 'family A admin could not join: %', r; end if;
   perform set_config('test.person_a', r ->> 'person_id', true);
   -- The link is now used up, for anyone.
   r := app_prj02.accept_invite(v_code, 'telegram', '5550001111', 'Someone else', 'v1');
-  if r ->> 'reason' <> 'used' then raise exception 'a used link joined someone: %', r; end if;
+  if r ->> 'reason' is distinct from 'used' then raise exception 'a used link joined someone: %', r; end if;
   -- Context: A's admin sees their family only, with their consent recorded.
   r := app_prj02.begin_request('telegram', '7123456789');
-  if r ->> 'notice_version' <> 'v1' or not (r ->> 'is_admin')::boolean then
+  if r ->> 'notice_version' is distinct from 'v1' or (r ->> 'is_admin')::boolean is not true then
     raise exception 'context wrong: %', r;
   end if;
   select count(*) into n from app_prj02.people where display_name = E'Wei Ling \U0001F338';
@@ -53,10 +53,10 @@ begin
   r := app_prj02.create_invite(48);
   perform set_config('test.code_a2', r ->> 'code', true);
   r := app_prj02.accept_invite(current_setting('test.code_a2'), 'telegram', '5550001111', 'Ah Hock', 'v1');
-  if not (r ->> 'ok')::boolean then raise exception 'second adult of A could not join: %', r; end if;
+  if (r ->> 'ok')::boolean is not true then raise exception 'second adult of A could not join: %', r; end if;
   -- A second adult who is not admin cannot invite.
   r := app_prj02.create_invite(48);
-  if r ->> 'reason' <> 'not_admin' then raise exception 'a non-admin adult created an invite: %', r; end if;
+  if r ->> 'reason' is distinct from 'not_admin' then raise exception 'a non-admin adult created an invite: %', r; end if;
   -- Back to A's admin: one more link, left open for the test below.
   perform app_prj02.begin_request('telegram', '7123456789');
   r := app_prj02.create_invite(24);
@@ -70,11 +70,11 @@ do $$
 declare r jsonb;
 begin
   r := app_prj02.accept_invite(current_setting('test.code_b'), 'telegram', '6200000001', 'Mdm Lim 林', 'v1');
-  if not (r ->> 'ok')::boolean then raise exception 'family B admin could not join: %', r; end if;
-  if r ->> 'family_id' <> current_setting('test.family_b') then raise exception 'B joined the wrong family'; end if;
+  if (r ->> 'ok')::boolean is not true then raise exception 'family B admin could not join: %', r; end if;
+  if r ->> 'family_id' is distinct from current_setting('test.family_b') then raise exception 'B joined the wrong family'; end if;
   -- An account already in a family cannot join another one.
   r := app_prj02.accept_invite(current_setting('test.code_a3'), 'telegram', '6200000001', 'Mdm Lim', 'v1');
-  if r ->> 'reason' <> 'already_member' then raise exception 'B joined family A as well: %', r; end if;
+  if r ->> 'reason' is distinct from 'already_member' then raise exception 'B joined family A as well: %', r; end if;
 end $$;
 
 -- B, in their own request, sees nothing of A and cannot change it.
@@ -174,7 +174,7 @@ begin
   end if;
   -- Join links that are unknown or expired do nothing.
   r := app_prj02.preview_invite('not-a-real-code');
-  if r ->> 'reason' <> 'unknown' then raise exception 'unknown code accepted: %', r; end if;
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'unknown code accepted: %', r; end if;
 end $$;
 
 reset role;
@@ -185,9 +185,84 @@ do $$
 declare r jsonb;
 begin
   r := app_prj02.accept_invite(current_setting('test.code_a3'), 'telegram', '8800000002', 'Late uncle', 'v1');
-  if r ->> 'reason' <> 'expired' then raise exception 'an expired link joined someone: %', r; end if;
+  if r ->> 'reason' is distinct from 'expired' then raise exception 'an expired link joined someone: %', r; end if;
 end $$;
 reset role;
+
+-- Calendar changes (prj02-R1 US-2): a change is written only after the yes of the adult who asked;
+-- nobody else, in the family or outside it, can decide it, see it or record its result.
+select app_prj02.set_calendar(current_setting('test.family_a')::uuid, 'tanfamily0123@group.calendar.google.com');
+select app_prj02.set_calendar(current_setting('test.family_b')::uuid, ' limhousehold@group.calendar.google.com ');
+set local role app_prj02_bot;
+do $$
+declare c uuid; r jsonb; n int; blocked boolean;
+begin
+  -- A's admin asks for a change: it waits, logged.
+  perform app_prj02.begin_request('telegram', '7123456789');
+  c := app_prj02.propose_change('add', null,
+    '{"title":"Ethan swim 🏊 (bring goggles!!)","start":"2026-11-28T15:00:00+08:00","end":"2026-11-28T16:00:00+08:00"}', 30);
+  perform set_config('test.change_a', c::text, true);
+  select count(*) into n from app_prj02.calendar_changes where id = c and status = 'proposed';
+  if n <> 1 then raise exception 'proposed change not logged'; end if;
+  select count(*) into n from app_prj02.calendars;
+  if n <> 1 then raise exception 'A sees % calendars, expected their own 1', n; end if;
+  -- The other adult of A cannot say yes for them.
+  perform app_prj02.begin_request('telegram', '5550001111');
+  r := app_prj02.decide_change(c, true);
+  if r ->> 'reason' is distinct from 'not_yours' then raise exception 'another adult decided the change: %', r; end if;
+  -- B sees nothing of it and cannot decide or record it.
+  perform app_prj02.begin_request('telegram', '6200000001');
+  select count(*) into n from app_prj02.calendar_changes where id = c;
+  if n <> 0 then raise exception 'B sees A''s calendar change'; end if;
+  select count(*) into n from app_prj02.calendars where family_id = current_setting('test.family_a')::uuid;
+  if n <> 0 then raise exception 'B sees A''s calendar'; end if;
+  r := app_prj02.decide_change(c, true);
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'B decided A''s change: %', r; end if;
+  if app_prj02.record_result(c, true, 'evil', null) then raise exception 'B recorded a result for A'; end if;
+  blocked := false;
+  begin
+    insert into app_prj02.calendar_changes (family_id, run_id, action, proposal, expires_at)
+      values (current_setting('test.family_a')::uuid, gen_random_uuid(), 'add', '{}', now() + interval '1 hour');
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked then raise exception 'B wrote a change straight into the log'; end if;
+  -- A's admin: no result before a yes; yes returns what to write; then the result is recorded once.
+  perform app_prj02.begin_request('telegram', '7123456789');
+  if app_prj02.record_result(c, true, 'evt-1', null) then raise exception 'a result was recorded before the yes'; end if;
+  r := app_prj02.decide_change(c, true);
+  if r ->> 'status' is distinct from 'approved' or coalesce(r -> 'proposal' ->> 'title', '') not like 'Ethan swim%' then
+    raise exception 'yes did not return the change: %', r;
+  end if;
+  if not app_prj02.record_result(c, true, 'evt-1', null) then raise exception 'result not recorded'; end if;
+  r := app_prj02.decide_change(c, true);
+  if r ->> 'reason' is distinct from 'applied' then raise exception 'an applied change could be decided again: %', r; end if;
+  -- No: declined, nothing to record.
+  c := app_prj02.propose_change('cancel', 'evt-9', '{"title":"Piano"}', 30);
+  r := app_prj02.decide_change(c, false);
+  if r ->> 'status' is distinct from 'declined' then raise exception 'no was not recorded: %', r; end if;
+  if app_prj02.record_result(c, true, 'evt-9', null) then raise exception 'a declined change was recorded as written'; end if;
+  -- Late yes on a proposal past its time.
+  c := app_prj02.propose_change('move', 'evt-3', '{"title":"Tuition"}', 1);
+  perform set_config('test.change_late', c::text, true);
+end $$;
+reset role;
+update app_prj02.calendar_changes set expires_at = now() - interval '1 second' where id = current_setting('test.change_late')::uuid;
+set local role app_prj02_bot;
+do $$
+declare r jsonb;
+begin
+  perform app_prj02.begin_request('telegram', '7123456789');
+  r := app_prj02.decide_change(current_setting('test.change_late')::uuid, true);
+  if r ->> 'reason' is distinct from 'expired' then raise exception 'a late yes was accepted: %', r; end if;
+end $$;
+reset role;
+do $$
+declare n int;
+begin
+  select count(*) into n from core.agent_runs r join app_prj02.calendar_changes c on c.run_id = r.id
+   where (c.status, r.status) in (('applied', 'done'), ('declined', 'cancelled'), ('expired', 'cancelled'));
+  if n <> 3 then raise exception 'agent runs do not follow the changes (% of 3)', n; end if;
+end $$;
 
 -- anon and authenticated reach nothing in app_prj02.
 do $$

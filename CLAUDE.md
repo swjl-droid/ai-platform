@@ -57,7 +57,7 @@ No organisation or family is onboarded before this holds and CI proves it.
 - Secrets apply to Production and Preview only, never Development.
 - Names agreed:
   - `prj01`: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `PLATFORM_DB_URL` (role `gateway_prj01`), `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`
-  - `prj02`: `ANTHROPIC_API_KEY`, `ONEMAP_EMAIL`, `ONEMAP_PASSWORD`, `PLATFORM_DB_URL` (role `gateway_prj02`), `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `TELEGRAM_BOT_TOKEN` (from BotFather; the webhook secret is derived from it, so there is no second Telegram secret), `APP_DB_URL` (role `app_prj02_bot`, Hub row 249)
+  - `prj02`: `ANTHROPIC_API_KEY`, `ONEMAP_EMAIL`, `ONEMAP_PASSWORD`, `PLATFORM_DB_URL` (role `gateway_prj02`), `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `TELEGRAM_BOT_TOKEN` (from BotFather; the webhook secret is derived from it, so there is no second Telegram secret), `APP_DB_URL` (role `app_prj02_bot`, Hub row 249), `GOOGLE_SA_KEY` (the JSON key of the bot's Google service account; each family shares its calendar with that account, decision 27/11/2026 'Bot reaches the Family calendar through a shared service account')
 - `PLATFORM_DB_URL` and `APP_DB_URL` connect through the Supabase shared pooler in transaction mode (port 6543), user `<role>.wgmldytllyxzvdlvqgnq`. John sets each role's password; Claude never sees it.
 
 ## Cost and tracing (step 5)
