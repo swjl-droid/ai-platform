@@ -9,6 +9,9 @@ here="$(cd "$(dirname "$0")" && pwd)"
 mutations=(
   's/for select to authenticated using (app_[a-z0-9]*\.is_member(org_id));/for select to authenticated using (true);/|a policy that lets everyone read'
   's/^  delete from auth\.users where id = p_user;/  -- planted: account kept/|a forget() that keeps the sign-in account'
+  's/for select to app_prj02_bot using (app_prj02\.is_member(family_id));/for select to app_prj02_bot using (true);/|a prj02 policy that lets the bot read every family'
+  's/^  delete from app_prj02\.people where id = p_person;/  -- planted: person kept/|a prj02 forget() that keeps the person'
+  's/^    delete from app_prj02\.request_ctx where xact = v_xact;/    -- planted: previous context kept/|a prj02 begin_request() that keeps the previous context for an unknown account'
 )
 fail=0
 for m in "${mutations[@]}"; do

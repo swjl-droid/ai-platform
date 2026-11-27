@@ -40,6 +40,14 @@ No organisation or family is onboarded before this holds and CI proves it.
    requires the tests to fail.
 5. A new app table comes with its policy and its lines in the app's separation and forget-me tests,
    in the same pull request.
+6. **Who is asking, per app.** prj01: the signed-in Supabase Auth user (`auth.uid()`), policies `to
+   authenticated`. prj02 (decision 27/11/2026, Hub row 249): users talk to Telegram, not to Supabase
+   Auth, so the bot's server code connects as role `app_prj02_bot` and calls
+   `app_prj02.begin_request(channel, account)` for each message; it records that contact's person for
+   the current transaction in `app_prj02.request_ctx` (which the bot role cannot write), and
+   `is_member()` reads it. The bot role never names a person or family itself, reads only through
+   policies and changes data only through `app_prj02` functions. `app_prj02` is not exposed in the
+   Data API.
 
 ## Keys and secrets
 
@@ -49,8 +57,8 @@ No organisation or family is onboarded before this holds and CI proves it.
 - Secrets apply to Production and Preview only, never Development.
 - Names agreed:
   - `prj01`: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `PLATFORM_DB_URL` (role `gateway_prj01`), `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`
-  - `prj02`: `ANTHROPIC_API_KEY`, `ONEMAP_EMAIL`, `ONEMAP_PASSWORD`, `PLATFORM_DB_URL` (role `gateway_prj02`), `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`
-- `PLATFORM_DB_URL` connects through the Supabase shared pooler in transaction mode (port 6543), user `<role>.wgmldytllyxzvdlvqgnq`. John sets each role's password; Claude never sees it.
+  - `prj02`: `ANTHROPIC_API_KEY`, `ONEMAP_EMAIL`, `ONEMAP_PASSWORD`, `PLATFORM_DB_URL` (role `gateway_prj02`), `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `TELEGRAM_BOT_TOKEN` (from BotFather; the webhook secret is derived from it, so there is no second Telegram secret), `APP_DB_URL` (role `app_prj02_bot`, Hub row 249)
+- `PLATFORM_DB_URL` and `APP_DB_URL` connect through the Supabase shared pooler in transaction mode (port 6543), user `<role>.wgmldytllyxzvdlvqgnq`. John sets each role's password; Claude never sees it.
 
 ## Cost and tracing (step 5)
 
@@ -109,7 +117,8 @@ in every place the platform keeps it, and the request itself is recorded without
    user id) so their rows can be found. No personal data in a table without such a key.
 2. **One forget function per app** (`forget(personId)`) lists every table it clears; a new table with
    personal data is added to it in the same pull request. prj01: `app_prj01.forget(user)` (server) and
-   `app_prj01.forget_me()` (the signed-in person).
+   `app_prj01.forget_me()` (the signed-in person). prj02: `app_prj02.forget(person)` (owner) and
+   `app_prj02.forget_me()` (the person in the current bot request, `/forgetme`).
 3. **What happens to shared rows:** app rows are deleted; `core.audit_log` and `core.cost_ledger` keep
    the row for accounting but lose the link (`tenant_id` set to null, `detail` emptied);
    `core.agent_runs` steps and goals are emptied.
@@ -120,7 +129,7 @@ in every place the platform keeps it, and the request itself is recorded without
    removed per table; no name, email or content.
 6. **CI test:** a forget-me test (create a person, add data everywhere, forget, check nothing is left)
    ships in the same pull request as the first family or organisation table (condition 2).
-   prj01: `supabase/tests/prj01_forget_test.sql`.
+   prj01: `supabase/tests/prj01_forget_test.sql`; prj02: `supabase/tests/prj02_forget_test.sql`.
 7. The time limit for answering a request is set in each app's privacy notice; backups follow
    Supabase's retention.
 
