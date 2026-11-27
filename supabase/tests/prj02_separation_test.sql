@@ -508,6 +508,108 @@ begin
   if n <> 1 then raise exception 'B''s own pause was not kept'; end if;
 end $$;
 
+-- Own plans for a clash (prj02-R1 US-6): only the adult who wrote it applies it, only in its family.
+update app_prj02.family_settings set max_messages_day = 30 where family_id = current_setting('test.family_a')::uuid;
+insert into app_prj02.reminders (family_id, trip_id, person_id, kind, send_at, payload)
+  values (current_setting('test.family_a')::uuid, current_setting('test.trip_a')::uuid, current_setting('test.person_a')::uuid,
+          'clash', now(), jsonb_build_object('trips', jsonb_build_array(current_setting('test.trip_a'))));
+do $$
+declare v uuid;
+begin
+  select id into v from app_prj02.reminders where kind = 'clash' and trip_id = current_setting('test.trip_a')::uuid
+     and person_id = current_setting('test.person_a')::uuid;
+  perform set_config('test.clash_a', v::text, true);
+  select id into v from app_prj02.people where family_id = current_setting('test.family_b')::uuid limit 1;
+  perform set_config('test.person_b', v::text, true);
+end $$;
+set local role app_prj02_bot;
+do $$
+declare r jsonb; v_plan uuid; t uuid := current_setting('test.trip_a')::uuid; blocked boolean; n int;
+begin
+  -- B cannot start a plan on A's clash.
+  perform app_prj02.begin_request('telegram', '6200000001');
+  r := app_prj02.plan_await(current_setting('test.clash_a')::uuid, 30);
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'B started a plan on A''s clash: %', r; end if;
+  if app_prj02.plan_pending() is not null then raise exception 'B has a pending plan'; end if;
+  -- A's admin writes a plan: no drop-off, pick-up by the admin.
+  perform app_prj02.begin_request('telegram', '7123456789');
+  r := app_prj02.plan_await(current_setting('test.clash_a')::uuid, 30);
+  v_plan := (r ->> 'plan')::uuid;
+  if (app_prj02.plan_pending() ->> 'status') is distinct from 'awaiting' then raise exception 'plan not awaiting'; end if;
+  if (app_prj02.plan_pending() -> 'trips' ->> 0)::uuid is distinct from t then raise exception 'plan does not list the clash trips'; end if;
+  if not app_prj02.plan_propose(v_plan, jsonb_build_array(jsonb_build_object('trip', t, 'mode', 'adult',
+       'person', current_setting('test.person_a'), 'drop', 'none', 'pick_at', '2026-11-28T18:00:00+08'))) then
+    raise exception 'plan not proposed';
+  end if;
+  -- A's other adult and B cannot say yes to it.
+  perform app_prj02.begin_request('telegram', '5550001111');
+  r := app_prj02.plan_decide(v_plan, true);
+  if r ->> 'reason' is distinct from 'not_yours' then raise exception 'another adult applied the plan: %', r; end if;
+  perform app_prj02.begin_request('telegram', '6200000001');
+  r := app_prj02.plan_decide(v_plan, true);
+  if r ->> 'reason' is distinct from 'unknown' then raise exception 'B applied A''s plan: %', r; end if;
+  -- The writer's yes applies it: no drop-off reminder, a pick-up reminder, pick-up at 18:00.
+  perform app_prj02.begin_request('telegram', '7123456789');
+  r := app_prj02.plan_decide(v_plan, true);
+  if r ->> 'status' is distinct from 'applied' then raise exception 'plan not applied: %', r; end if;
+  r := app_prj02.plan_decide(v_plan, true);
+  if r ->> 'reason' is distinct from 'applied' then raise exception 'a plan was applied twice: %', r; end if;
+  -- A plan that names someone of another family is refused as a whole.
+  r := app_prj02.plan_await(current_setting('test.clash_a')::uuid, 30);
+  v_plan := (r ->> 'plan')::uuid;
+  perform app_prj02.plan_propose(v_plan, jsonb_build_array(jsonb_build_object('trip', t, 'mode', 'adult', 'person', current_setting('test.person_b'))));
+  blocked := false;
+  begin perform app_prj02.plan_decide(v_plan, true);
+  exception when invalid_parameter_value then blocked := true; end;
+  if not blocked then raise exception 'a plan named an adult of another family'; end if;
+  -- The bot cannot read plans directly (functions only).
+  blocked := false;
+  begin select count(*) into n from app_prj02.trip_plans;
+  exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'the chat bot reads own plans directly'; end if;
+end $$;
+reset role;
+do $$
+declare n int;
+begin
+  select count(*) into n from app_prj02.trips where id = current_setting('test.trip_a')::uuid
+     and drop_mode = 'none' and pick_mode is null and pick_at = '2026-11-28T18:00:00+08'
+     and owner_person_id = current_setting('test.person_a')::uuid;
+  if n <> 1 then raise exception 'plan not applied to the trip'; end if;
+  select count(*) into n from app_prj02.reminders where trip_id = current_setting('test.trip_a')::uuid and status = 'due' and kind = 'drop';
+  if n <> 0 then raise exception 'a drop-off reminder for a leg the adult said is not needed'; end if;
+  select count(*) into n from app_prj02.reminders where trip_id = current_setting('test.trip_a')::uuid and status = 'due' and kind = 'pick';
+  if n <> 1 then raise exception 'pick-up reminder missing'; end if;
+end $$;
+-- Stay rule: a leg not needed gets no reminder from a tap either.
+set local role app_prj02_job;
+do $$
+begin
+  perform app_prj02.begin_job(current_setting('test.family_a')::uuid);
+  perform app_prj02.job_upsert_trip('evt-stay', '2026-11-28T16:30:00+08', '2026-11-28T18:00:00+08', 'Tennis', 'UWC 139654',
+         18, 'onemap', '2026-11-28T16:02:00+08', '2026-11-28T17:37:00+08', '2026-11-28T16:02:00+08', '2026-11-28T17:37:00+08', false, true);
+end $$;
+reset role;
+set local role app_prj02_bot;
+do $$
+declare r jsonb; t uuid;
+begin
+  perform app_prj02.begin_request('telegram', '7123456789');
+  select id into t from app_prj02.trips where event_id = 'evt-stay';
+  r := app_prj02.assign_trips(jsonb_build_array(jsonb_build_object('trip', t, 'mode', 'taxi')));
+  if (r ->> 'ok')::boolean is not true then raise exception 'stay trip not assigned: %', r; end if;
+  perform set_config('test.stay', t::text, true);
+end $$;
+reset role;
+do $$
+declare n int;
+begin
+  select count(*) into n from app_prj02.reminders where trip_id = current_setting('test.stay')::uuid and kind = 'drop';
+  if n <> 0 then raise exception 'a drop-off reminder although the child is already there (stay rule)'; end if;
+  select count(*) into n from app_prj02.reminders where trip_id = current_setting('test.stay')::uuid and kind = 'pick';
+  if n <> 1 then raise exception 'stay trip pick-up reminder missing'; end if;
+end $$;
+
 -- anon and authenticated reach nothing in app_prj02.
 do $$
 declare blocked boolean; who text;
