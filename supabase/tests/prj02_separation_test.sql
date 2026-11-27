@@ -286,6 +286,16 @@ begin
   if n <> 2 then raise exception 'job A sees % people, expected 2', n; end if;
   select count(*) into n from app_prj02.contacts where family_id = v_b;
   if n <> 0 then raise exception 'job A sees family B''s contacts'; end if;
+  -- Travel modes (Hub row 277): A's three starting rows, nothing of B.
+  select count(*) into n from app_prj02.travel_modes where family_id = v_a;
+  if n <> 3 then raise exception 'job A sees % travel modes, expected 3', n; end if;
+  select count(*) into n from app_prj02.travel_modes where family_id is distinct from v_a;
+  if n <> 0 then raise exception 'job A sees travel modes of another family'; end if;
+  perform app_prj02.job_save_place('jurong west pool', 1.34, 103.69, 35, 'onemap', 'pt');
+  perform app_prj02.job_save_place('jurong west pool', 1.34, 103.69, 18, 'onemap');
+  select count(*) into n from app_prj02.places where label_key = 'jurong west pool';
+  if n <> 2 then raise exception 'drive and public-transport times of one place not kept apart (% rows)', n; end if;
+  perform app_prj02.job_mark_scan(null, null); -- A was just scanned
   t := app_prj02.job_upsert_trip('evt-swim', '2026-11-28T15:00:00+08', '2026-11-28T16:00:00+08', 'Ethan swim 🏊', ' Jurong West ',
          18, 'onemap', '2026-11-28T14:32:00+08', '2026-11-28T15:37:00+08', '2026-11-28T14:32:00+08', '2026-11-28T15:37:00+08');
   perform set_config('test.trip_a', t::text, true);
@@ -314,6 +324,14 @@ begin
   if n <> 0 then raise exception 'job B sees A''s trips'; end if;
   select count(*) into n from app_prj02.people;
   if n <> 1 then raise exception 'job B sees % people, expected 1', n; end if;
+  select count(*) into n from app_prj02.travel_modes;
+  if n <> 0 then raise exception 'job B sees % travel modes of A', n; end if;
+  select count(*) into n from app_prj02.places;
+  if n <> 0 then raise exception 'job B sees A''s saved places'; end if;
+  blocked := false;
+  begin update app_prj02.travel_modes set estimate_min = 1;
+  exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'the job role changed travel modes directly'; end if;
   blocked := false;
   begin perform app_prj02.job_queue(t, 'clash', (select id from app_prj02.people limit 1), now(), '{}');
   exception when foreign_key_violation then blocked := true; end;
@@ -371,6 +389,10 @@ begin
   -- The bot reads no reminders or places (the outbox is the scheduler's).
   select count(*) into n from app_prj02.reminders;
   if n <> 0 then raise exception 'the chat bot reads the outbox'; end if;
+  blocked := false;
+  begin perform count(*) from app_prj02.travel_modes;
+  exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'the chat bot reads travel modes'; end if;
 end $$;
 reset role;
 do $$
@@ -380,6 +402,10 @@ begin
    where trip_id = current_setting('test.trip_a')::uuid and kind in ('drop', 'pick') and status = 'due'
      and person_id = current_setting('test.person_a')::uuid;
   if n <> 2 then raise exception 'assignment queued % reminders for the owner, expected 2', n; end if;
+  -- The tap asks the next tick to re-plan family A only.
+  select count(*) into n from app_prj02.family_settings
+   where family_id = current_setting('test.family_a')::uuid and last_scan_at is null;
+  if n <> 1 then raise exception 'a tap did not ask for a new scan of the family'; end if;
 end $$;
 
 -- anon and authenticated reach nothing in app_prj02.

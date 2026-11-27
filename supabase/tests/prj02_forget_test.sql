@@ -159,6 +159,8 @@ begin
   if n <> 0 then raise exception 'saved places of the family left'; end if;
   select count(*) into n from app_prj02.family_settings where family_id = v_family;
   if n <> 0 then raise exception 'family settings left'; end if;
+  select count(*) into n from app_prj02.travel_modes where family_id = v_family;
+  if n <> 0 then raise exception 'travel modes of the family left'; end if;
   -- core: rows kept, link removed.
   select count(*) into n from core.cost_ledger where tenant_id = v_family;
   if n <> 0 then raise exception 'cost rows still linked'; end if;
@@ -175,7 +177,8 @@ begin
      or coalesce((d ->> 'app_prj02.invites')::int, -1) <> 3 or coalesce((d ->> 'core.cost_ledger')::int, -1) <> 1
      or coalesce((d ->> 'core.agent_runs')::int, -1) <> 3 or coalesce((d ->> 'app_prj02.calendar_changes')::int, -1) <> 2
      or coalesce((d ->> 'app_prj02.calendars')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.trips')::int, -1) <> 1
-     or coalesce((d ->> 'app_prj02.places')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.family_settings')::int, -1) <> 1 then
+     or coalesce((d ->> 'app_prj02.places')::int, -1) <> 1 or coalesce((d ->> 'app_prj02.family_settings')::int, -1) <> 1
+     or coalesce((d ->> 'app_prj02.travel_modes')::int, -1) <> 3 then
     raise exception 'second forget log counts wrong: %', d;
   end if;
   if d::text like '%' || v_p2::text || '%' or d::text like '%7000000%' then
